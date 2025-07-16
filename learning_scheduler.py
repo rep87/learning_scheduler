@@ -1,4 +1,5 @@
-# learning_scheduler.py
+# learning_scheduler.py# learning_scheduler.py — tag‑enabled version\n"""\n Ultra Rapid Knowledge Cycling & Expansion (URKCE) — with tag filtering\n –––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––\n Core additions vs. previous version\n   • LearningItem.tags: list[str]\n   • add_item(..., tags=[])\n   • get_due_items(..., tag_filter=None)\n   • from_dict() backward‑compat with older JSON (no tags)\n"""\nfrom __future__ import annotations\n\nimport json, uuid\nfrom dataclasses import dataclass, asdict, field\nfrom datetime import date, timedelta\nfrom pathlib import Path\nfrom typing import List, Optional\n\nACTIVE_PATH = Path("learning_items.json")\nDONE_PATH   = Path("completed_items.json")\n\nINTERVALS = {0: 1, 1: 3, 2: 7, 3: 30}  # days until next review after O\n\n# ──────────────────────────────────────────────────────────────────────────────\n# LearningItem\n# ──────────────────────────────────────────────────────────────────────────────\n@dataclass\nclass LearningItem:\n    content: str\n    summary: str = ""\n    id: str = field(default_factory=lambda: str(uuid.uuid4()))\n    initial_date: str = field(default_factory=lambda: date.today().isoformat())\n    last_review_date: str = field(default_factory=lambda: date.today().isoformat())\n    next_review_date: str = field(default_factory=lambda: (date.today()+timedelta(days=1)).isoformat())\n    memory_count: int = 0           # 0‑3\n    status: str = "X"               # "O", "Δ", "X"\n    history: List[dict] = field(default_factory=list)\n    tags: List[str] = field(default_factory=list)\n\n    # ────────────────────────────────────────────────────────────────────────\n    def review(self, status: str, summary_update: Optional[str] = None):\n        status = status.upper()\n        assert status in {"O", "Δ", "X"}, "status must be O/Δ/X"\n        today = date.today().isoformat()\n        self.status = status\n        self.last_review_date = today\n        self.history.append({"date": today, "status": status})\n        if summary_update is not None:\n            self.summary = summary_update\n        if status == "O":\n            self.memory_count = min(self.memory_count + 1, 3)\n        elif status == "X":\n            self.memory_count = 0\n        self._schedule_next()\n\n    # ────────────────────────────────────────────────────────────────────────\n    def _schedule_next(self):\n        self.next_review_date = (date.today() + timedelta(days=INTERVALS[self.memory_count])).isoformat()\n\n    def is_due(self, on: date) -> bool:\n        return date.fromisoformat(self.next_review_date) <= on\n\n    def to_dict(self):\n        return asdict(self)\n\n    @staticmethod\n    def from_dict(d: dict) -> "LearningItem":\n        if "tags" not in d:   # backward‑compat\n            d["tags"] = []\n        return LearningItem(**d)\n\n# ──────────────────────────────────────────────────────────────────────────────\n# LearningDB\n# ──────────────────────────────────────────────────────────────────────────────\nclass LearningDB:\n    def __init__(self, active_path: Path = ACTIVE_PATH, done_path: Path = DONE_PATH):\n        self.active_path = active_path\n        self.done_path   = done_path\n        self.active:   List[LearningItem] = []\n        self.completed: List[LearningItem] = []\n        self.load()\n\n    # —— file IO ——\n    def load(self):\n        self.active    = self._load_file(self.active_path)\n        self.completed = self._load_file(self.done_path)\n\n    def save(self):\n        self._save_file(self.active_path, self.active)\n        self._save_file(self.done_path, self.completed)\n\n    def _load_file(self, path: Path) -> List[LearningItem]:\n        if not path.exists():\n            return []\n        with path.open("r", encoding="utf‑8") as f:\n            raw = json.load(f)\n        return [LearningItem.from_dict(x) for x in raw]\n\n    def _save_file(self, path: Path, items: List[LearningItem]):\n        with path.open("w", encoding="utf‑8") as f:\n            json.dump([it.to_dict() for it in items], f, ensure_ascii=False, indent=2)\n\n    # —— creation ——\n    def add_item(self, content: str, summary: str = "", tags: list[str] | None = None) -> LearningItem:\n        it = LearningItem(content=content, summary=summary, tags=tags or [])\n        self.active.append(it)\n        self.save()\n        return it\n\n    # —— querying ——\n    def get_due_items(self, on: date = date.today(), tag_filter: list[str] | None = None) -> List[LearningItem]:\n        # 1) date filter\n        pool = [it for it in self.active if it.is_due(on)]\n        # 2) tag filter (if any)\n        if tag_filter:\n            wanted = {t.lower() for t in tag_filter}\n            pool = [it for it in pool if wanted & {t.lower() for t in it.tags}]\n        # 3) priority sort\n        pool.sort(key=lambda x: (date.fromisoformat(x.next_review_date), x.memory_count, x.status == "X"))\n        return pool\n\n    # —— review ——\n    def review_item(self, item: LearningItem, status: str, summary_update: Optional[str] = None):\n        item.review(status, summary_update)\n        if item.memory_count >= 3 and status == "O":\n            self.active.remove(item)\n            self.completed.append(item)\n        self.save()
+
 """Ultra Rapid Knowledge Cycling & Expansion (URKCE)
 -------------------------------------------------------------------------------
 A lightweight Python library + CLI that implements the learning workflow we 
@@ -139,11 +140,21 @@ class LearningDB:
             json.dump([it.to_dict() for it in items], f, ensure_ascii=False, indent=2)
 
     # ------------------------------------------------------------------
-    def add_item(self, content: str, summary: str = "") -> LearningItem:
-        it = LearningItem(content=content, summary=summary)
+    def add_item(
+            self,
+            content: str,
+            summary: str = "",
+            tags: list[str] | None = None,   # ⭐ 추가
+        ) -> LearningItem:
+        it = LearningItem(
+            content=content,
+            summary=summary,
+            tags=tags or []                  # None → 빈 리스트
+        )
         self.active.append(it)
         self.save()
         return it
+
 
     # ------------------------------------------------------------------
     def get_due_items(
@@ -183,6 +194,11 @@ class LearningDB:
             self.active.remove(item)
             self.completed.append(item)
         self.save()
+
+    def from_dict(d: dict) -> "LearningItem":
+    if "tags" not in d:          # 예전 JSON엔 없을 수 있음
+        d["tags"] = []
+    return LearningItem(**d)
 
 # ----------------------------------------------------------------------------
 # Simple CLI entry‐point
