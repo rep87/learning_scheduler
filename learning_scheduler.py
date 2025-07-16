@@ -59,6 +59,7 @@ class LearningItem:
     memory_count: int = 0  # 0‑3
     status: str = "X"  # "O", "Δ", "X"
     history: List[dict] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
 
     # ---------------------------------------------------------------------
     # Logic helpers
@@ -145,12 +146,35 @@ class LearningDB:
         return it
 
     # ------------------------------------------------------------------
-    def get_due_items(self, on: date = date.today()) -> List[LearningItem]:
-        """Return active items whose next_review_date <= today, ordered by priority."""
-        return sorted(
-            [it for it in self.active if it.is_due(on)],
-            key=lambda x: (date.fromisoformat(x.next_review_date), x.memory_count, x.status == "X"),
-        )
+    def get_due_items(
+            self,
+            on: date = date.today(),
+            tag_filter: list[str] | None = None,
+        ) -> List[LearningItem]:
+        """
+        반환:
+            - today(기본) 또는 원하는 날짜까지 복습 대상
+            - tag_filter가 주어지면, 해당 태그와 교집합이 있는 항목만
+        """
+        # 1) 날짜 기준 필터
+        pool = [it for it in self.active if it.is_due(on)]
+    
+        # 2) 태그 필터(옵션)
+        if tag_filter:
+            wanted = {t.lower() for t in tag_filter}
+            pool = [
+                it for it in pool
+                if wanted & {t.lower() for t in it.tags}  # 교집합 존재
+            ]
+    
+        # 3) 우선순위 정렬 그대로
+        pool.sort(key=lambda x: (
+            date.fromisoformat(x.next_review_date),
+            x.memory_count,
+            x.status == "X",
+        ))
+        return pool
+
 
     # ------------------------------------------------------------------
     def review_item(self, item: LearningItem, status: str, summary_update: Optional[str] = None):
