@@ -1,305 +1,244 @@
 # -*- coding: utf-8 -*-
 """
-Word‑Learning Scheduler (MVP v0.2)
-==================================
-Single‑file package importable from Colab.
+Word‑Learning Scheduler (MVP v0.2.1)
+====================================
+Patch: • unify search/lookup naming  • single‑line output when searching
 
-Phase‑1 features:
-    • Persist word DB (JSON) with per‑word stats & tags
-    • Cache TTS audio for *words* on insertion (gTTS → mp3)
-    • Optional on‑demand TTS for example sentences
-    • Quiz modes: multiple‑choice, wrong‑only, recall(type‑in)
-    • Basic SRS‑friendly weight (wrong_cnt priority)
-    • Word lookup / edit / delete   ◀ NEW
-
-Public API (stable):
-    setup_dirs, add_word, search_word, edit_word, delete_word,
-    quiz_random, quiz_wrong, quiz_recall,
-    show_vocab, show_stats
-
-Future hooks are marked TODO.
+This file overwrites the previous v0.2 implementation.
 """
 from __future__ import annotations
 
-import json, random, uuid, hashlib
-from pathlib import Path
+import json
+import random
+import sys
+import time
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
-from typing import List, Dict, Any, Optional
-from collections import Counter
+from pathlib import Path
+from typing import Dict, List, Optional
 
-try:
-    from gtts import gTTS
-    from IPython.display import Audio, display
-except ImportError:  # allow import without Colab
-    gTTS, Audio, display = None, None, print
+from gtts import gTTS
+from IPython.display import Audio, display
 
 # ---------------------------------------------------------------------------
-# Global constants – BASE is user‑configurable after import
+# Global config
 # ---------------------------------------------------------------------------
-BASE: Path = Path('.')            # to be overwritten in notebook
-DATA_DIR: Path = Path('data')     # BASE / data
-AUDIO_WORD_DIR: Path = Path('')   # BASE / data / audio_cache / words_audio
-AUDIO_EX_DIR: Path = Path('')     # BASE / data / audio_cache / examples_audio
-DB_FILE: Path = Path('')          # BASE / data / words.json
-LOG_FILE: Path = Path('')         # BASE / data / quizzes.jsonl
+BASE: Path = Path('.')  # to be overwritten by user
+DATA_DIR: Path = None   # resolved inside setup_dirs()
+AUDIO_DIR: Path = None
+WORDS_PATH: Path = None
+QUIZLOG_PATH: Path = None
+
+WORDS_DB: Dict[str, dict] = {}
 
 # ---------------------------------------------------------------------------
-# I/O helpers
+# Utilities
 # ---------------------------------------------------------------------------
+
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat()
+
 
 def setup_dirs() -> None:
-    """Create BASE/data/... structure and bind global paths."""
-    global DATA_DIR, AUDIO_WORD_DIR, AUDIO_EX_DIR, DB_FILE, LOG_FILE
+    """Create data & audio cache folders under BASE and load DB."""
+    global DATA_DIR, AUDIO_DIR, WORDS_PATH, QUIZLOG_PATH
+
     DATA_DIR = BASE / 'data'
-    AUDIO_WORD_DIR = DATA_DIR / 'audio_cache' / 'words_audio'
-    AUDIO_EX_DIR = DATA_DIR / 'audio_cache' / 'examples_audio'
-    for p in [DATA_DIR, AUDIO_WORD_DIR, AUDIO_EX_DIR]:
-        p.mkdir(parents=True, exist_ok=True)
-    DB_FILE = DATA_DIR / 'words.json'
-    LOG_FILE = DATA_DIR / 'quizzes.jsonl'
-    if not DB_FILE.exists():
-        DB_FILE.write_text('{}', encoding='utf-8')
+    AUDIO_DIR = DATA_DIR / 'audio_cache'
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    (AUDIO_DIR / 'words_audio').mkdir(parents=True, exist_ok=True)
+    (AUDIO_DIR / 'examples_audio').mkdir(parents=True, exist_ok=True)
 
-
-def load_db() -> Dict[str, Any]:
-    return json.loads(DB_FILE.read_text(encoding='utf-8'))
-
-
-def save_db(db: Dict[str, Any]) -> None:
-    DB_FILE.write_text(json.dumps(db, ensure_ascii=False, indent=2), encoding='utf-8')
+    WORDS_PATH = DATA_DIR / 'words.json'
+    QUIZLOG_PATH = DATA_DIR / 'quizzes.jsonl'
+    load_db()
 
 # ---------------------------------------------------------------------------
-# Audio helpers
+# DB IO
 # ---------------------------------------------------------------------------
 
-def _word_mp3_path(word: str) -> Path:
-    return AUDIO_WORD_DIR / f"{word.lower()}.mp3"
+def load_db() -> None:
+    global WORDS_DB
+    if WORDS_PATH.exists():
+        WORDS_DB = json.loads(WORDS_PATH.read_text())
+    else:
+        WORDS_DB = {}
 
 
-def _ensure_word_audio(word: str) -> None:
-    path = _word_mp3_path(word)
-    if path.exists():
-        return
-    if gTTS is None:
-        return
-    tts = gTTS(word)
-    tts.save(str(path))
-
-
-def _play(path: Path):
-    if Audio and path.exists():
-        display(Audio(str(path), autoplay=True))
-
-
-def _tts_sentence(text: str):
-    if gTTS is None:
-        return
-    h = hashlib.md5(text.encode()).hexdigest()
-    path = AUDIO_EX_DIR / f"{h}.mp3"
-    if not path.exists():
-        gTTS(text).save(str(path))
-    _play(path)
+def save_db() -> None:
+    WORDS_PATH.write_text(json.dumps(WORDS_DB, ensure_ascii=False, indent=2))
 
 # ---------------------------------------------------------------------------
-# Core CRUD operations
+# TTS helpers
 # ---------------------------------------------------------------------------
 
-def add_word(word: str, definition_en: str, examples: List[str] | None = None, tags: List[str] | None = None):
-    """Insert or update a word entry; cache its audio."""
-    db = load_db()
-    entry = db.get(word, {
-        'definition_en': '',
-        'examples': [],
-        'tags': [],
+def _word_mp3(word: str) -> Path:
+    return AUDIO_DIR / 'words_audio' / f"{word.lower()}.mp3"
+
+
+def _ensure_word_tts(word: str):
+    mp3 = _word_mp3(word)
+    if not mp3.exists():
+        gTTS(word).save(mp3)
+    return mp3
+
+
+def _play_audio(mp3: Path):
+    display(Audio(str(mp3), autoplay=True))
+
+# ---------------------------------------------------------------------------
+# Word operations
+# ---------------------------------------------------------------------------
+
+def add_word(word: str, *, definition_en: str, examples: Optional[List[str]] = None,
+             tags: Optional[List[str]] = None):
+    word = word.strip()
+    ex_list = examples or []
+    tag_list = tags or []
+
+    record = WORDS_DB.get(word, {
+        'definition_en': definition_en,
+        'examples': ex_list,
+        'tags': tag_list,
         'correct_cnt': 0,
         'wrong_cnt': 0,
-        'added_at': datetime.utcnow().isoformat()
+        'added_at': _now_iso(),
     })
-    entry['definition_en'] = definition_en
-    if examples:
-        entry['examples'] = examples
-    if tags:
-        entry['tags'] = tags
-    db[word] = entry
-    save_db(db)
-    _ensure_word_audio(word)
+
+    # update definition/examples/tags if re‑adding
+    record['definition_en'] = definition_en
+    record['examples'] = ex_list
+    record['tags'] = tag_list
+    WORDS_DB[word] = record
+
+    _ensure_word_tts(word)
+    save_db()
 
 
-def search_word(word: str) -> Optional[Dict[str, Any]]:
-    """Return word dict or None; pretty‑print if run in notebook."""
-    db = load_db()
-    entry = db.get(word)
-    if entry:
-        display({word: entry}) if 'display' in globals() else print({word: entry})
+# ---------------------------------------------------------------------------
+# Search / lookup / edit / delete
+# ---------------------------------------------------------------------------
+
+def search_word(word: str, *, pretty: bool = True):
+    """Return a word record; pretty print single layer if found."""
+    entry = WORDS_DB.get(word)
+    if entry and pretty:
+        print({word: entry})
+    elif not entry:
+        print(f"'{word}' not found.")
     return entry
 
-
-def edit_word(word: str, *, definition_en: str | None = None,
-              examples: List[str] | None = None, tags: List[str] | None = None):
-    db = load_db()
-    if word not in db:
-        raise KeyError(f"'{word}' not found")
-    if definition_en is not None:
-        db[word]['definition_en'] = definition_en
-    if examples is not None:
-        db[word]['examples'] = examples
-    if tags is not None:
-        db[word]['tags'] = tags
-    save_db(db)
+# alias for backward compatibility
+find_word = lookup = search_word
 
 
-def delete_word(word: str, *, purge_audio: bool = False):
-    db = load_db()
-    if word in db:
-        db.pop(word)
-        save_db(db)
-        if purge_audio:
-            _word_mp3_path(word).unlink(missing_ok=True)
-
-# ---------------------------------------------------------------------------
-# Quiz utilities
-# ---------------------------------------------------------------------------
-
-def _weighted_choice(words: List[str], db: Dict[str, Any]) -> str:
-    weights = [db[w]['wrong_cnt'] + 1 for w in words]
-    return random.choices(words, weights=weights, k=1)[0]
-
-
-def _get_choices(target: str, db: Dict[str, Any]) -> List[str]:
-    """Return list of 4 definitions (first is target) shuffled."""
-    others = [w for w in db if w != target]
-    random.shuffle(others)
-    defs = [db[target]['definition_en']] + [db[o]['definition_en'] for o in others[:3]]
-    random.shuffle(defs)
-    return defs
-
-
-def _ask_mcq(word: str, db: Dict[str, Any]):
-    _play(_word_mp3_path(word))
-    choices = _get_choices(word, db)
-    print(f"\n⚙️  What is the meaning of '{word}'?")
-    for i, c in enumerate(choices, 1):
-        print(f"  {i}. {c}")
-    ans = input('> ').strip()
-    correct = choices[int(ans)-1] == db[word]['definition_en'] if ans.isdigit() else False
-    if correct:
-        print('✅ Correct!')
-        db[word]['correct_cnt'] += 1
-    else:
-        print(f"❌ Wrong. → {db[word]['definition_en']}")
-        db[word]['wrong_cnt'] += 1
-    return correct
-
-
-def quiz_random(n: int = 10):
-    """Multiple‑choice quiz with *unique* words sampled by wrong_cnt weight."""
-    db = load_db()
-    if not db:
-        print('No words in DB.')
+def edit_word(word: str, **fields):
+    if word not in WORDS_DB:
+        print(f"'{word}' not found.")
         return
-    pool = list(db.keys())
-    n = min(n, len(pool))
-    # sample without replacement by iterative weighted draw
-    selected = []
-    tmp_pool = pool.copy()
-    for _ in range(n):
-        choice = _weighted_choice(tmp_pool, db)
-        selected.append(choice)
-        tmp_pool.remove(choice)
-    _run_session(selected, db, mode='random')
+    WORDS_DB[word].update(fields)
+    save_db()
+    print(f"updated '{word}'.")
 
 
-def quiz_wrong(n: int = 10):
-    db = load_db()
-    wrong_words = [w for w, e in db.items() if e['wrong_cnt'] > 0]
+def delete_word(word: str):
+    if word in WORDS_DB:
+        WORDS_DB.pop(word)
+        save_db()
+        print(f"deleted '{word}'.")
+    else:
+        print(f"'{word}' not found.")
+
+# ---------------------------------------------------------------------------
+# Quiz helpers
+# ---------------------------------------------------------------------------
+
+def _weighted_sample(words: List[str], n: int, unique: bool = True) -> List[str]:
+    if unique and len(words) >= n:
+        population = random.sample(words, k=n)  # unique selection
+        return population
+    # fallback to weighted random with replacement
+    weights = [WORDS_DB[w]['wrong_cnt'] + 1 for w in words]
+    return random.choices(words, weights=weights, k=n)
+
+
+def _multiple_choice(target: str, options: List[str]):
+    print(f"\n👉 {target}")
+    _play_audio(_word_mp3(target))
+    for idx, opt in enumerate(options, 1):
+        print(f"  {idx}. {opt}")
+    ans = input("Your choice: ")
+    return ans.strip()
+
+
+# ---------------------------------------------------------------------------
+# Public quiz APIs
+# ---------------------------------------------------------------------------
+
+def quiz_random(n: int = 5, *, unique: bool = True):
+    words = list(WORDS_DB)
+    if not words:
+        print("No words in database.")
+        return
+    selected = _weighted_sample(words, n, unique=unique)
+    _run_mc_quiz(selected)
+
+
+def quiz_wrong(n: int = 5):
+    wrong_words = [w for w, rec in WORDS_DB.items() if rec['wrong_cnt'] > 0]
     if not wrong_words:
-        print('No wrong words yet – great!')
+        print("No wrong answers yet – great job!")
         return
-    n = min(n, len(wrong_words))
-    selected = random.sample(wrong_words, k=n)
-    _run_session(selected, db, mode='wrong_only')
+    selected = _weighted_sample(wrong_words, n)
+    _run_mc_quiz(selected)
 
 
-def quiz_recall(n: int = 10):
-    """Show definition, user types word."""
-    db = load_db()
-    pool = list(db.keys())
-    n = min(n, len(pool))
-    selected = random.sample(pool, k=n)
-    correct_cnt = 0
-    for word in selected:
-        definition = db[word]['definition_en']
-        print(f"\n💡 Word? → {definition}")
-        ans = input('> ').strip()
-        if ans.lower() == word.lower():
-            print('✅')
-            db[word]['correct_cnt'] += 1
-            correct_cnt += 1
-        else:
-            print(f"❌ {word}")
-            db[word]['wrong_cnt'] += 1
-    _log_session(n, correct_cnt, mode='recall')
-    save_db(db)
-    print(f"Accuracy: {correct_cnt}/{n} = {correct_cnt/n*100:.1f}%")
-
-# ---------------------------------------------------------------------------
-# Session logging & helpers
-# ---------------------------------------------------------------------------
-
-def _run_session(words: List[str], db: Dict[str, Any], mode: str):
-    correct_total = 0
-    for w in words:
-        if _ask_mcq(w, db):
-            correct_total += 1
-    _log_session(len(words), correct_total, mode)
-    save_db(db)
-    print(f"\nSession complete – Accuracy: {correct_total}/{len(words)} = {correct_total/len(words)*100:.1f}%")
+def _run_mc_quiz(target_words: List[str]):
+    correct = 0
+    for tgt in target_words:
+        # pick 3 distractors
+        distractors = random.sample([w for w in WORDS_DB if w != tgt], k=min(3, len(WORDS_DB)-1))
+        choices_defs = [WORDS_DB[w]['definition_en'] for w in distractors] + [WORDS_DB[tgt]['definition_en']]
+        random.shuffle(choices_defs)
+        user_ans = _multiple_choice(tgt, choices_defs)
+        try:
+            idx = int(user_ans) - 1
+            is_correct = choices_defs[idx] == WORDS_DB[tgt]['definition_en']
+        except Exception:
+            is_correct = False
+        print("✔️" if is_correct else "❌")
+        _update_stats(tgt, is_correct)
+        correct += is_correct
+    print(f"\nQuiz done: {correct}/{len(target_words)} correct.")
 
 
-def _log_session(q_cnt: int, correct: int, mode: str):
-    entry = {
-        'date': datetime.utcnow().isoformat(),
-        'mode': mode,
-        'questions': q_cnt,
-        'correct': correct
-    }
-    with LOG_FILE.open('a', encoding='utf-8') as f:
-        f.write(json.dumps(entry) + '\n')
+def _update_stats(word: str, is_correct: bool):
+    rec = WORDS_DB[word]
+    rec['correct_cnt'] += int(is_correct)
+    rec['wrong_cnt'] += int(not is_correct)
+    save_db()
 
 # ---------------------------------------------------------------------------
-# Reporting utilities
+# Vocab & stats views
 # ---------------------------------------------------------------------------
 
-def show_vocab(order: str = 'alpha'):
-    db = load_db()
-    if not db:
-        print('DB empty.')
-        return
+def show_vocab(order: str = 'wrong_desc'):
+    rows = [(w, r['correct_cnt'] + r['wrong_cnt'], r['wrong_cnt']) for w, r in WORDS_DB.items()]
     if order == 'wrong_desc':
-        words = sorted(db, key=lambda w: db[w]['wrong_cnt'], reverse=True)
-    else:
-        words = sorted(db)
-    print(f"{'WORD':<20} {'WRONG':>5} {'CORRECT':>7}  TAGS")
-    for w in words:
-        e = db[w]
-        print(f"{w:<20} {e['wrong_cnt']:>5} {e['correct_cnt']:>7}  {','.join(e['tags'])}")
+        rows.sort(key=lambda x: x[2], reverse=True)
+    elif order == 'recent':
+        rows.sort(key=lambda x: WORDS_DB[x[0]]['added_at'], reverse=True)
+    print("word | attempts | wrong")
+    for w, a, wr in rows:
+        print(f"{w:20} {a:>3} {wr:>3}")
 
 
 def show_stats():
-    db = load_db()
-    total_attempts = sum(e['wrong_cnt']+e['correct_cnt'] for e in db.values())
-    if total_attempts == 0:
-        print('No attempts recorded yet.')
+    total = sum(r['correct_cnt'] + r['wrong_cnt'] for r in WORDS_DB.values())
+    if not total:
+        print("No quiz history yet.")
         return
-    wrong_sum = sum(e['wrong_cnt'] for e in db.values())
-    acc = 100*(total_attempts-wrong_sum)/total_attempts
-    top_wrong = Counter({w:e['wrong_cnt'] for w,e in db.items()}).most_common(5)
-    print(f"Total attempts: {total_attempts}, Accuracy: {acc:.1f}%")
-    print('Top wrong words:')
-    for w, c in top_wrong:
-        print(f"  {w}: {c} errors")
+    correct = sum(r['correct_cnt'] for r in WORDS_DB.values())
+    print(f"Overall accuracy: {correct/total*100:.1f}%  (answered {total} questions)")
 
-# ---------------------------------------------------------------------------
-# END
-# ---------------------------------------------------------------------------
-
+# end of file
