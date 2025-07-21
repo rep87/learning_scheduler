@@ -94,22 +94,37 @@ def _save_db(db: Dict[str, Dict]):
 def _word_audio_path(word: str) -> Path:
     return BASE / DATA_DIRNAME / AUDIO_DIRNAME / WORD_AUDIO_DIRNAME / f"{word.lower()}.mp3"
 
-
-def _speak(text: str, cache_path: Optional[Path] = None, autoplay: bool = True):
-    """Speak text. If cache_path provided and exists, reuse; else generate."""
-    if cache_path is not None and cache_path.exists():
-        audio_path = cache_path
-    else:
-        audio_obj = gTTS(text)
-        if cache_path is None:
-            # tmp file
-            tmp_name = f"/tmp/tts_{hashlib.md5(text.encode()).hexdigest()[:8]}.mp3"
-            audio_path = Path(tmp_name)
-        else:
-            audio_path = cache_path
-        audio_obj.save(str(audio_path))
-    if autoplay:
-        display(Audio(str(audio_path), autoplay=True))
+def generate_and_validate(path: Path) -> Path:
+    # 1) gTTS로 생성
+    audio_obj = gTTS(text, lang="en")
+    audio_obj.save(str(path))
+    # 2) 최소 크기 검사 (예: 10 KB)
+    size = path.stat().st_size
+    if size < 10_000:
+        # 손상된 파일이라면 삭제 후 재시도
+        path.unlink(missing_ok=True)
+        raise ValueError(f"TTS audio too small ({size} bytes)")
+    return path
+# 캐시 사용 여부 결정
+if cache_path is not None and cache_path.exists():
+    audio_path = cache_path
+    # 캐시가 손상되었을 가능성 검사
+    try:
+        if audio_path.stat().st_size < 10_000:
+            raise ValueError("Cached MP3 too small, regenerating")
+    except Exception:
+        audio_path = generate_and_validate(audio_path)
+else:
+    # tmp 또는 cache_path에 새로 생성
+    target = cache_path or Path(f"/tmp/tts_{hashlib.md5(text.encode()).hexdigest()[:8]}.mp3")
+    try:
+        audio_path = generate_and_validate(target)
+    except ValueError as e:
+        print(f"[!] TTS generation failed for “{text}”: {e}")
+        return
+if autoplay:
+    # 브라우저 자동재생 정책 때문에 False로 두고 수동 클릭을 유도하는 게 더 안정적일 수 있습니다.
+    display(Audio(str(audio_path), autoplay=False))
 
 # ------------------------------
 # Public API
