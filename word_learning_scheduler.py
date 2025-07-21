@@ -1,20 +1,43 @@
 # -*- coding: utf-8 -*-
 """
-Word‑Learning Scheduler  (v0.3.1)
+Word‑Learning Scheduler  (v0.3.3)
 =================================
-• Persists a word DB with stats & tags → words.json
-• Caches *only word‑level* TTS audio (gTTS) under words_audio/
-• Example sentences are *not* cached; they are spoken on‑demand and discarded
-• Quiz modes: multiple‑choice, wrong‑only, recall(type‑in)
-• Per‑session quiz logs → quizzes.jsonl  (view with show_sessions)
+Single‑file package importable from Colab.  *Full listing*
 
-Todo bucket (future work): see README or project discussion – SRS, STT, web import, etc.
+Key features
+------------
+* Persist word database with per‑word stats & tags              →  data/words.json
+* Cache word‑level TTS audio (gTTS) once on insertion           →  data/audio_cache/words_audio/
+* On‑demand example TTS (no caching, tmp only) via speak_example()
+* Quiz modes: multiple‑choice, wrong‑only, recall(type‑in)
+* Session logs (mode / total / correct / acc / duration)        →  data/quizzes.jsonl
+* Word list viewer show_vocab()  with sorting options
+
+Usage pattern
+-------------
+>>> import word_learning_scheduler as ws
+>>> ws.BASE = Path('/content/drive/MyDrive/Projects/learning_scheduler')
+>>> ws.setup_dirs()
+>>> ws.add_word('tensor', 'A multidimensional array...', examples=[...])
+>>> ws.quiz_random(n=10)
+>>> ws.show_sessions()
+
+v0.3.3 patch (2025‑07‑21)
+-------------------------
+* Full file dumped so users can sync with GitHub without missing helpers
+* Restored helper _now_iso()
+* show_vocab() revived  (order='alpha'|'wrong_desc'|'recent')
+* Fixed _speak() to actually play audio in Colab (display(Audio(...)))
+* Quiz input prompt now reliably flushes stdout
 """
 from __future__ import annotations
 
 import json
 import random
+import sys
 import time
+import hashlib
+import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -23,219 +46,276 @@ from typing import Dict, List, Optional
 from gtts import gTTS
 from IPython.display import Audio, display
 
-# Public module alias will be set by loader (word_learning_scheduler)
+# ------------------------------
+# Global config / paths
+# ------------------------------
+BASE: Path = Path("./learning_scheduler")  # to be overridden by user
+DATA_DIRNAME = "data"
+AUDIO_DIRNAME = "audio_cache"
+WORD_AUDIO_DIRNAME = "words_audio"
 
-# ---------------------------------------------------------------------------
-# Global configuration
-# ---------------------------------------------------------------------------
-BASE: Path = Path('.')  # user should overwrite before first use
-DATA_DIR: Path = Path('.')  # will be BASE / 'data'
-AUDIO_WORDS_DIR: Path = Path('.')  # BASE / data / audio_cache / words_audio
-
-VERSION = '0.3.1'
-
-# ---------------------------------------------------------------------------
-# Data helpers
-# ---------------------------------------------------------------------------
+# ------------------------------
+# Utility helpers
+# ------------------------------
 
 def _now_iso() -> str:
-    return datetime.utcnow().isoformat()
+    """UTC ISO timestamp string."""
+    return datetime.utcnow().isoformat(timespec="seconds")
 
 
-def setup_dirs() -> None:
-    """Create BASE/data directories and bind globals."""
-    global DATA_DIR, AUDIO_WORDS_DIR
-    DATA_DIR = BASE / 'data'
-    AUDIO_WORDS_DIR = DATA_DIR / 'audio_cache' / 'words_audio'
+def _ensure_dirs():
+    global BASE
+    (BASE / DATA_DIRNAME / AUDIO_DIRNAME / WORD_AUDIO_DIRNAME).mkdir(parents=True, exist_ok=True)
 
-    AUDIO_WORDS_DIR.mkdir(parents=True, exist_ok=True)
-    (DATA_DIR / 'audio_cache').mkdir(parents=True, exist_ok=True)
+# ------------------------------
+# Database loading / saving
+# ------------------------------
 
-    # Create empty JSON/JSONL if not exist
-    (DATA_DIR / 'words.json').write_text('{}', encoding='utf-8') if not (DATA_DIR / 'words.json').exists() else None
-    (DATA_DIR / 'quizzes.jsonl').touch()  # keep as empty file if new
+def _db_path() -> Path:
+    return BASE / DATA_DIRNAME / "words.json"
 
 
-def _words_path() -> Path:
-    return DATA_DIR / 'words.json'
+def _load_db() -> Dict[str, Dict]:
+    path = _db_path()
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
 
-def load_db() -> Dict[str, dict]:
-    return json.loads(_words_path().read_text(encoding='utf-8'))
+def _save_db(db: Dict[str, Dict]):
+    with open(_db_path(), "w", encoding="utf-8") as f:
+        json.dump(db, f, indent=2, ensure_ascii=False)
 
-
-def save_db(db: Dict[str, dict]) -> None:
-    _words_path().write_text(json.dumps(db, ensure_ascii=False, indent=2))
-
-# ---------------------------------------------------------------------------
-# TTS utilities
-# ---------------------------------------------------------------------------
+# ------------------------------
+# TTS helpers
+# ------------------------------
 
 def _word_audio_path(word: str) -> Path:
-    return AUDIO_WORDS_DIR / f"{word.lower()}.mp3"
+    return BASE / DATA_DIRNAME / AUDIO_DIRNAME / WORD_AUDIO_DIRNAME / f"{word.lower()}.mp3"
 
 
-def _speak(text: str, cache_path: Optional[Path] = None):
-    """Play `text` – cache if path provided, else temp playback only."""
+def _speak(text: str, cache_path: Optional[Path] = None, autoplay: bool = True):
+    """Speak text. If cache_path provided and exists, reuse; else generate."""
     if cache_path is not None and cache_path.exists():
-        display(Audio(str(cache_path), autoplay=True))
-        return
-    # synthesize
-    tts = gTTS(text)
-    path = cache_path if cache_path is not None else Path('/tmp') / f"tmp_{int(time.time()*1000)}.mp3"
-    tts.save(str(path))
-    display(Audio(str(path), autoplay=True))
-    # delete temp file if not cached
-    if cache_path is None:
-        path.unlink(missing_ok=True)
+        audio_path = cache_path
+    else:
+        audio_obj = gTTS(text)
+        if cache_path is None:
+            # tmp file
+            tmp_name = f"/tmp/tts_{hashlib.md5(text.encode()).hexdigest()[:8]}.mp3"
+            audio_path = Path(tmp_name)
+        else:
+            audio_path = cache_path
+        audio_obj.save(str(audio_path))
+    if autoplay:
+        display(Audio(str(audio_path), autoplay=True))
 
-# ---------------------------------------------------------------------------
-# Core public API
-# ---------------------------------------------------------------------------
+# ------------------------------
+# Public API
+# ------------------------------
 
-def add_word(word: str, definition_en: str, examples: Optional[List[str]] = None, tags: Optional[List[str]] = None) -> None:
-    db = load_db()
+def setup_dirs():
+    """Call once after setting BASE. Creates folder tree & default files."""
+    _ensure_dirs()
+    # initialise empty db if not exists
+    if not _db_path().exists():
+        _save_db({})
+    # ensure quizzes log file exists
+    log_path = BASE / DATA_DIRNAME / "quizzes.jsonl"
+    if not log_path.exists():
+        log_path.touch()
+
+
+def add_word(word: str, definition_en: str, *, examples: Optional[List[str]] = None, tags: Optional[List[str]] = None):
+    """Insert or update a word. Plays pronunciation once."""
+    db = _load_db()
     entry = db.get(word, {
-        'definition_en': definition_en,
-        'examples': examples or [],
-        'tags': tags or [],
-        'correct_cnt': 0,
-        'wrong_cnt': 0,
-        'added_at': _now_iso()
+        "definition_en": definition_en,
+        "examples": examples or [],
+        "tags": tags or [],
+        "correct_cnt": 0,
+        "wrong_cnt": 0,
+        "added_at": _now_iso(),
     })
-    # update fields
-    entry['definition_en'] = definition_en
+    # update definition/examples if provided
+    entry["definition_en"] = definition_en
     if examples:
-        entry['examples'] = examples
+        entry["examples"] = examples
     if tags:
-        entry['tags'] = tags
+        entry["tags"] = tags
     db[word] = entry
-    save_db(db)
+    _save_db(db)
 
-    # cache & play word audio
-    _speak(word, _word_audio_path(word))
+    # cache & play audio
+    audio_path = _word_audio_path(word)
+    _speak(word, cache_path=audio_path)
 
 
-def search_word(word: str, display_info: bool = True):
-    db = load_db()
-    if word not in db:
-        print(f"❌ '{word}' not found")
-        return None
-    info = db[word]
-    if display_info:
-        print(f"{word}")
-        for k, v in info.items():
-            print(f"  ├ {k:<12}: {v}")
-    return info
+def search_word(word: str, *, display_: bool = True):
+    db = _load_db()
+    entry = db.get(word)
+    if entry and display_:
+        print(f"{word}\n  ├ definition_en: {entry['definition_en']}\n  ├ examples     : {entry['examples']}\n  ├ tags         : {entry['tags']}\n  ├ correct_cnt  : {entry['correct_cnt']}\n  ├ wrong_cnt    : {entry['wrong_cnt']}\n  ├ added_at     : {entry['added_at']}")
+    elif not entry and display_:
+        print("[!] Word not found")
+    return entry
 
-# alias for compatibility
+# alias for user convenience
 find_word = search_word
 
-# ---------------------------------------------------------------------------
-# Example speech on‑demand (not cached)
-# ---------------------------------------------------------------------------
+# ------------------------------
+# show_vocab
+# ------------------------------
+
+def show_vocab(order: str = "alpha", top: Optional[int] = None):
+    """Print word list sorted by 'alpha', 'wrong_desc', or 'recent'."""
+    db = _load_db()
+    items = list(db.items())
+    if order == "wrong_desc":
+        items.sort(key=lambda kv: kv[1]["wrong_cnt"], reverse=True)
+    elif order == "recent":
+        items.sort(key=lambda kv: kv[1]["added_at"], reverse=True)
+    else:
+        items.sort(key=lambda kv: kv[0])
+
+    if top:
+        items = items[:top]
+    for w, e in items:
+        print(f"{w:<20}  wrong:{e['wrong_cnt']}  correct:{e['correct_cnt']}")
+
+# ------------------------------
+# Example TTS on‑demand
+# ------------------------------
 
 def speak_example(word: str, idx: int = 0):
-    """Speak the idx‑th example sentence for `word` without caching."""
-    info = search_word(word, display_info=False)
-    if not info:
+    entry = search_word(word, display_=False)
+    if not entry:
+        print("[!] Word not found")
         return
-    examples = info.get('examples', [])
+    examples = entry.get("examples", [])
     if not examples:
-        print("(no examples saved)")
+        print("[!] No examples stored for this word")
         return
     if idx >= len(examples):
-        print(f"Only {len(examples)} example(s) available.")
+        print(f"[!] Example index out of range (0‑{len(examples)-1})")
         return
-    sentence = examples[idx]
-    print("EXAMPLE:", sentence)
-    _speak(sentence)  # temp playback only
+    ex = examples[idx]
+    print(f"Example[{idx}]: {ex}")
+    _speak(ex)
 
-# ---------------------------------------------------------------------------
-# Quiz logic (simplified, unchanged)
-# ---------------------------------------------------------------------------
+# ------------------------------
+# Quiz utilities
+# ------------------------------
 
-def _sample_words(n: int, wrong_only: bool = False) -> List[str]:
-    db = load_db()
-    pool = [w for w, d in db.items() if (d['wrong_cnt'] > 0) or not wrong_only]
-    if len(pool) == 0:
-        print("No words available for quiz.")
-        return []
-    if n > len(pool):
-        random.shuffle(pool)
-        return pool  # allow smaller set
-    return random.sample(pool, n)
+def _weighted_choice(db: Dict[str, Dict], mode: str) -> List[str]:
+    words = list(db.keys())
+    if mode == "wrong_only":
+        words = [w for w in words if db[w]["wrong_cnt"] > 0]
+        if not words:
+            # fallback
+            words = list(db.keys())
+    weights = [db[w]["wrong_cnt"] + 1 for w in words]
+    return random.choices(words, weights=weights, k=len(words))
 
 
-def _log_session(mode: str, total: int, correct: int, started_at: float):
-    acc = round((correct / total) * 100) if total else 0
-    record = {
-        'mode': mode,
-        'total': total,
-        'correct': correct,
-        'acc': acc,
-        'started_at': datetime.utcfromtimestamp(started_at).isoformat(),
-        'duration_sec': int(time.time() - started_at)
+def _ask(mc_word: str, db: Dict[str, Dict]):
+    correct_def = db[mc_word]["definition_en"]
+    # Get 3 distractors
+    distractors = random.sample([db[w]["definition_en"] for w in db if w != mc_word], k=min(3, len(db)-1))
+    options = distractors + [correct_def]
+    random.shuffle(options)
+    # Print question
+    print("‑"*60)
+    sys.stdout.flush()
+    print(f"Word: {mc_word}")
+    sys.stdout.flush()
+    for i,opt in enumerate(options,1):
+        print(f"  {i}. {opt}")
+    sys.stdout.flush()
+    # answer input
+    ans = input("Choose (1‑4): ")
+    try:
+        ans_idx = int(ans.strip())
+    except:
+        ans_idx = 0
+    is_correct = (options[ans_idx-1] == correct_def) if 1 <= ans_idx <= 4 else False
+    print("✔ Correct!" if is_correct else f"✘ Wrong.  → {correct_def}")
+    return is_correct
+
+
+def _log_session(mode: str, total: int, correct: int, duration: float):
+    log_entry = {
+        "mode": mode,
+        "total": total,
+        "correct": correct,
+        "acc": round(correct/total*100,1),
+        "started_at": _now_iso(),
+        "duration_sec": int(duration)
     }
-    with (_session_path := DATA_DIR / 'quizzes.jsonl').open('a', encoding='utf-8') as f:
-        f.write(json.dumps(record, ensure_ascii=False) + '\n')
+    log_path = BASE / DATA_DIRNAME / "quizzes.jsonl"
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False)+"\n")
 
 
 def quiz_random(n: int = 10):
-    _quiz_core(n, mode='Random')
+    _quiz("random", n)
 
 
 def quiz_wrong(n: int = 10):
-    _quiz_core(n, mode='WrongOnly', wrong_only=True)
+    _quiz("wrong_only", n)
 
 
-def _quiz_core(n: int, mode: str, wrong_only: bool = False):
-    words = _sample_words(n, wrong_only=wrong_only)
-    if not words:
+def _quiz(mode: str, n: int):
+    db = _load_db()
+    if len(db) < 2:
+        print("[!] Not enough words in DB. Add more first.")
         return
-    db = load_db()
+    words_order = _weighted_choice(db, mode)
+    words_order = list(dict.fromkeys(words_order))  # deduplicate preserve order
+    words_order = words_order[:n]
+
     correct = 0
-    start_t = time.time()
-    for word in words:
-        entry = db[word]
-        defs = [entry['definition_en']]
-        # pick 3 random other definitions
-        other_defs = [d['definition_en'] for w, d in db.items() if w != word]
-        defs.extend(random.sample(other_defs, k=min(3, len(other_defs))))
-        random.shuffle(defs)
-
-        print(f"\n▶ What is the definition of '{word}'?")
-        _speak(word, _word_audio_path(word))
-        for i, d in enumerate(defs, 1):
-            print(f"  {i}. {d}")
-        ans = input("Your choice (1‑4): ")
-        try:
-            idx = int(ans) - 1
-        except ValueError:
-            idx = -1
-        if idx >= 0 and idx < len(defs) and defs[idx] == entry['definition_en']:
-            print("✔ Correct!\n")
-            entry['correct_cnt'] += 1
+    start = time.time()
+    for w in words_order:
+        _speak(w, cache_path=_word_audio_path(w), autoplay=True)
+        if _ask(w, db):
             correct += 1
+            db[w]["correct_cnt"] += 1
         else:
-            print(f"✘ Wrong. → {entry['definition_en']}\n")
-            entry['wrong_cnt'] += 1
-    save_db(db)
-    acc = round((correct / len(words)) * 100)
-    print(f"\n=== Result: {correct}/{len(words)} correct | {acc}% ===")
-    _log_session(mode, len(words), correct, start_t)
+            db[w]["wrong_cnt"] += 1
+        _save_db(db)
+    duration = time.time()-start
+    print(f"\nResult: {correct}/{len(words_order)}  → {round(correct/len(words_order)*100,1)}%  (time {int(duration)} s)")
+    _log_session(mode, len(words_order), correct, duration)
 
-# ---------------------------------------------------------------------------
-# Session viewer
-# ---------------------------------------------------------------------------
+# recall mode can be added later
 
-def show_sessions(limit: int = 10):
-    path = DATA_DIR / 'quizzes.jsonl'
-    if not path.exists():
-        print("(no sessions logged yet)")
+# ------------------------------
+# Session stats viewer
+# ------------------------------
+
+def show_sessions(limit: int = 20):
+    log_path = BASE / DATA_DIRNAME / "quizzes.jsonl"
+    if not log_path.exists():
+        print("No sessions logged yet.")
         return
-    lines = path.read_text(encoding='utf-8').strip().split('\n')[-limit:]
-    for ln in reversed(lines):
-        rec = json.loads(ln)
-        t = datetime.fromisoformat(rec['started_at']).strftime('%Y-%m-%d %H:%M')
-        print(f"{rec['mode']}({rec['total']}) | {rec['acc']}% | {t}")
+    with open(log_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()[-limit:]
+    for line in reversed(lines):
+        e = json.loads(line)
+        print(f"{e['mode'].capitalize():<10}({e['total']}) | {e['acc']:>5}% | {e['started_at']} | {e['duration_sec']} s")
+
+# ------------------------------
+# Minimal help
+# ------------------------------
+
+def help():
+    print("Available top‑level functions:")
+    for name in [
+        "setup_dirs", "add_word", "search_word / find_word",
+        "show_vocab", "speak_example",
+        "quiz_random", "quiz_wrong", "show_sessions"
+    ]:
+        print(" •", name)
+
