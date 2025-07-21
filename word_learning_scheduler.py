@@ -121,7 +121,7 @@ else:
         audio_path = generate_and_validate(target)
     except ValueError as e:
         print(f"[!] TTS generation failed for “{text}”: {e}")
-        return
+    return
 if autoplay:
     # 브라우저 자동재생 정책 때문에 False로 두고 수동 클릭을 유도하는 게 더 안정적일 수 있습니다.
     display(Audio(str(audio_path), autoplay=False))
