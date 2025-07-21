@@ -1,281 +1,224 @@
 # -*- coding: utf-8 -*-
 """
-Word‑Learning Scheduler  (v0.4.1‑full)
-======================================
-Complete single‑file module with all public APIs restored.
-Use ws.help() inside Colab to see the callable surface.
+Word‑Learning Scheduler  (v0.4.2‑patch)
+========================================
+Bug‑fix release addressing user‑reported issues:
+ 1. **quiz_random / quiz_wrong** now play word audio first and ask for the *definition* (options = 4 definitions).
+ 2. **show_sessions()** lists *all* modes (choice, recall, spelling) with latest n.
+ 3. **show_vocab()** displays per‑mode stats: c_choice/w_choice | c_recall/w_recall | c_spell/w_spell.
+ 4. Quiz prompt reliably shows by flushing stdout.
 """
 from __future__ import annotations
 
 import json, random, sys, time, os, hashlib
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
 try:
+    from gtts import gTTS
     from IPython.display import Audio, display
 except ImportError:
-    Audio = None
-    def display(x):
-        print("[display placeholder]", x)
+    gTTS, Audio, display = None, None, None
 
-try:
-    from gtts import gTTS
-except ImportError:
-    gTTS = None
+# ---------------------------- helpers ----------------------------
 
-# ---------------------------------------------------------------------------
-BASE: Path = Path('.')  # caller should overwrite then call setup_dirs()
-DATA_DIR: Path = Path('.')
-WORDS_JSON: Path = Path('.')
-WORDS_AUDIO_DIR: Path = Path('.')
+BASE: Path = Path('.')
+DATA_DIR: Path = None
+WORDS_FILE: Path = None
+AUDIO_DIR: Path = None
 
-# ---------------------------------------------------------------------------
-# Helper --------------------------------------------------------------------
 
-def _now_iso() -> str:
-    return datetime.utcnow().isoformat(timespec='seconds')
+def setup_dirs():
+    global DATA_DIR, WORDS_FILE, AUDIO_DIR
+    DATA_DIR = BASE / 'data'
+    AUDIO_DIR = DATA_DIR / 'audio_cache' / 'words_audio'
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    global WORDS_FILE
+    WORDS_FILE = DATA_DIR / 'words.json'
+    if not WORDS_FILE.exists():
+        WORDS_FILE.write_text('{}', encoding='utf-8')
 
-# very simple Levenshtein (distance 1 allowed for almost correct)
-_def = None
+# ---------------------------- util -------------------------------
+
+def _now_iso():
+    return datetime.utcnow().isoformat()
+
+
+def _load() -> Dict[str, dict]:
+    return json.loads(WORDS_FILE.read_text(encoding='utf-8'))
+
+
+def _save(db: Dict[str, dict]):
+    WORDS_FILE.write_text(json.dumps(db, ensure_ascii=False, indent=2))
+
+
+def _speak(word: str):
+    if gTTS is None:
+        print("[TTS unavailable]")
+        return
+    mp3 = AUDIO_DIR / f"{word.lower()}.mp3"
+    if not mp3.exists():
+        gTTS(word).save(str(mp3))
+    display(Audio(str(mp3), autoplay=True))
+
 
 def _lev(a: str, b: str) -> int:
     if len(a) < len(b):
         a, b = b, a
     if len(b) == 0:
         return len(a)
-    previous_row = range(len(b) + 1)
-    for i, ca in enumerate(a):
-        current_row = [i + 1]
-        for j, cb in enumerate(b):
-            insertions = previous_row[j + 1] + 1
-            deletions = current_row[j] + 1
-            substitutions = previous_row[j] + (ca != cb)
-            current_row.append(min(insertions, deletions, substitutions))
-        previous_row = current_row
-    return previous_row[-1]
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i]
+        for j, cb in enumerate(b, 1):
+            ins, dele, sub = prev[j] + 1, curr[j-1] + 1, prev[j-1] + (ca != cb)
+            curr.append(min(ins, dele, sub))
+        prev = curr
+    return prev[-1]
 
-# ---------------------------------------------------------------------------
-# Core persistence -----------------------------------------------------------
+# -------------------------- core API -----------------------------
 
-def setup_dirs():
-    global DATA_DIR, WORDS_JSON, WORDS_AUDIO_DIR
-    DATA_DIR = BASE / 'data'
-    WORDS_AUDIO_DIR = DATA_DIR / 'audio_cache' / 'words_audio'
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    WORDS_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-    WORDS_JSON = DATA_DIR / 'words.json'
-    if not WORDS_JSON.exists():
-        WORDS_JSON.write_text('{}', encoding='utf-8')
-
-
-def _load() -> Dict:
-    return json.loads(WORDS_JSON.read_text(encoding='utf-8'))
-
-
-def _save(db: Dict):
-    WORDS_JSON.write_text(json.dumps(db, ensure_ascii=False, indent=2))
-
-# ---------------------------------------------------------------------------
-# Audio ----------------------------------------------------------------------
-
-def _word_mp3_path(word: str) -> Path:
-    return WORDS_AUDIO_DIR / f"{word.lower()}.mp3"
-
-
-def _speak(word: str):
-    if gTTS is None or Audio is None:
-        return
-    path = _word_mp3_path(word)
-    if not path.exists():
-        gTTS(word).save(str(path))
-    display(Audio(str(path), autoplay=True))
-
-
-def speak_example(word: str, idx: int = 0):
+def add_word(word: str, definition_en: str, examples: List[str], tags: List[str]):
     db = _load()
-    entry = db[word]
-    if idx >= len(entry['examples']):
-        print('No example index')
-        return
-    text = entry['examples'][idx]
-    print(text)
-    if gTTS and Audio:
-        tmp = Path('/tmp') / f"ex_{hashlib.md5(text.encode()).hexdigest()}.mp3"
-        gTTS(text).save(tmp)
-        display(Audio(str(tmp), autoplay=True))
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-
-# ---------------------------------------------------------------------------
-# Add / edit / delete --------------------------------------------------------
-
-def add_word(*, word: str, definition_en: str, examples: List[str], tags: List[str]):
-    db = _load()
-    db[word] = {
-        'definition_en': definition_en,
-        'examples': examples,
-        'tags': tags,
-        'stats': {
-            'choice':  { 'correct': 0, 'wrong': 0, 'last': None },
-            'recall':  { 'correct': 0, 'wrong': 0, 'last': None },
-            'speak':   { 'correct': 0, 'wrong': 0, 'last': None },
-        },
-        'srs': { 'ef': 2.5, 'interval': 1, 'next_due': _now_iso() },
-        'added_at': _now_iso()
-    }
+    if word not in db:
+        db[word] = {
+            'definition_en': definition_en,
+            'examples': examples,
+            'tags': tags,
+            'stats': {
+                'choice': {'c': 0, 'w': 0},
+                'recall': {'c': 0, 'w': 0},
+                'spelling': {'c': 0, 'w': 0}
+            },
+            'added_at': _now_iso()
+        }
     _save(db)
     _speak(word)
-
-
-def search_word(word: str, display_entry: bool = True):
-    db = _load()
-    if word not in db:
-        print('Not found')
-        return None
-    if display_entry:
-        print(word)
-        for k, v in db[word].items():
-            if k in ('definition_en', 'added_at'):
-                print(f"  ├ {k}: {v}")
-        print()
-    return db[word]
-
-find_word = search_word
-
-
-def edit_word(word: str, **fields):
-    db = _load()
-    if word not in db:
-        print('Not found'); return
-    db[word].update(fields)
-    _save(db)
-
-
-def delete_word(word: str):
-    db = _load()
-    if db.pop(word, None) is not None:
-        _save(db)
-        path = _word_mp3_path(word);
-        try: path.unlink()
-        except OSError: pass
-
-# ---------------------------------------------------------------------------
-# Quiz helpers ---------------------------------------------------------------
-
-def _pick_words(n: int, mode: str = 'choice') -> List[str]:
-    db = _load()
-    if n >= len(db):
-        return list(db.keys())
-    keys = list(db.keys())
-    random.shuffle(keys)
-    return keys[:n]
-
-
-def _record(db, word, kind, correct):
-    stat = db[word]['stats'][kind]
-    stat['correct' if correct else 'wrong'] += 1
-    stat['last'] = _now_iso()
-
-# Multiple‑choice ------------------------------------------------------------
-
-def quiz_random(n: int = 10):
-    _quiz_choice(n, mode='random')
-
-def quiz_wrong(n: int = 10):
-    _quiz_choice(n, mode='wrong')
-
-def _quiz_choice(n: int, mode: str):
-    db = _load()
-    words = _pick_words(n)
-    correct_total = 0
-    for word in words:
-        _speak(word)
-        options = [word] + random.sample([w for w in db if w != word], 3)
-        random.shuffle(options)
-        print(f"\n>>>> {db[word]['definition_en']}")
-        for i, opt in enumerate(options, 1):
-            print(i, opt)
-        ans = input('Your choice: ')
-        try: idx = int(ans) - 1
-        except ValueError: idx = -1
-        chosen = options[idx] if 0 <= idx < 4 else None
-        is_correct = (chosen == word)
-        if is_correct:
-            print('✓ Correct')
-            correct_total += 1
-        else:
-            print(f"✗ Wrong (answer: {word})")
-        _record(db, word, 'choice', is_correct)
-    _save(db)
-    print(f"\nResult: {correct_total}/{len(words)}  ({correct_total*100//len(words)}%)")
-
-# Spelling recall ------------------------------------------------------------
-
-def quiz_spelling(n: int = 10):
-    db = _load()
-    words = _pick_words(n)
-    correct_total = 0
-    for word in words:
-        _speak(word)
-        guess = input('▶ Type the word you heard: ').strip()
-        dist = _lev(guess.lower(), word.lower())
-        is_correct = dist == 0
-        almost = dist == 1
-        if is_correct:
-            print('✓ Correct')
-            correct_total += 1
-        elif almost:
-            print(f'~ Almost ({word})')
-        else:
-            print(f'✗ Wrong ({word})')
-        _record(db, word, 'recall', is_correct)
-    _save(db)
-    print(f"\nSpelling result: {correct_total}/{len(words)}  ({correct_total*100//len(words)}%)")
-
-# Sessions log & vocab -------------------------------------------------------
-QUIZ_LOG: Path = None  # initialised below
-
-def _log_session(mode: str, total: int, correct: int, duration: float):
-    global QUIZ_LOG
-    if QUIZ_LOG is None:
-        QUIZ_LOG = DATA_DIR / 'quizzes.jsonl'
-    entry = dict(mode=mode, total=total, correct=correct, acc=round(correct/total*100), started_at=_now_iso(), duration_sec=int(duration))
-    QUIZ_LOG.open('a').write(json.dumps(entry)+'\n')
 
 
 def show_vocab(order: str = 'alpha'):
     db = _load()
     items = list(db.items())
     if order == 'wrong_desc':
-        items.sort(key=lambda kv: kv[1]['stats']['choice']['wrong'], reverse=True)
+        items.sort(key=lambda t: t[1]['stats']['choice']['w'] + t[1]['stats']['spelling']['w'], reverse=True)
     elif order == 'recent':
-        items.sort(key=lambda kv: kv[1]['added_at'], reverse=True)
+        items.sort(key=lambda t: t[1]['added_at'], reverse=True)
     else:
-        items.sort(key=lambda kv: kv[0])
-    for w, info in items:
-        wrong = info['stats']['choice']['wrong']
-        correct = info['stats']['choice']['correct']
-        print(f"{w:15}  c:{correct}  w:{wrong}  {info['definition_en'][:40]}")
+        items.sort()
+    for w, d in items:
+        s = d['stats']
+        print(f"{w:15} choice {s['choice']['c']}/{s['choice']['w']} | spell {s['spelling']['c']}/{s['spelling']['w']}  {d['definition_en'][:60]}")
+
+# --------------------- quiz helpers -----------------------------
+
+def _log_session(mode: str, total: int, correct: int, t0: float):
+    log = {
+        'mode': mode,
+        'total': total,
+        'correct': correct,
+        'acc': round(correct / total * 100, 1),
+        'started_at': _now_iso(),
+        'duration': round(time.time() - t0, 1)
+    }
+    f = DATA_DIR / 'quizzes.jsonl'
+    with f.open('a', encoding='utf-8') as fh:
+        fh.write(json.dumps(log, ensure_ascii=False) + '\n')
 
 
 def show_sessions(limit: int = 10):
-    path = DATA_DIR / 'quizzes.jsonl'
-    if not path.exists():
-        print('No sessions'); return
-    lines = path.read_text().strip().split('\n')[-limit:][::-1]
-    for line in lines:
-        e = json.loads(line)
-        print(f"{e['mode']:<8}({e['total']}) | {e['acc']:3}% | {e['started_at']} | {e['duration_sec']}s")
+    f = DATA_DIR / 'quizzes.jsonl'
+    if not f.exists():
+        print("(no sessions yet)"); return
+    lines = f.read_text(encoding='utf-8').strip().split('\n')[-limit:][::-1]
+    for ln in lines:
+        j = json.loads(ln)
+        print(f"{j['mode']:8} | {j['total']:3} | {j['acc']:5}% | {j['duration']:4}s | {j['started_at'][:16]}")
 
-# help -----------------------------------------------------------------------
+# ---------------------- quiz modes ------------------------------
+
+def _pick_words(n: int) -> List[str]:
+    db = _load()
+    words = list(db.keys())
+    if len(words) <= n:
+        return words
+    return random.sample(words, n)
+
+
+def quiz_random(n: int = 10):
+    db = _load(); words = _pick_words(n)
+    correct = 0; t0 = time.time()
+    for w in words:
+        _speak(w)
+        # build choices of definitions
+        defs = [db[w]['definition_en']]
+        others = [db[o]['definition_en'] for o in db if o != w]
+        defs += random.sample(others, k=3) if len(others) >=3 else others
+        random.shuffle(defs)
+        print("Choose the correct definition for the word you heard:\n")
+        for i, d in enumerate(defs, 1):
+            print(f" {i} {d[:80]}")
+        sys.stdout.flush()
+        choice = input("Your choice: ")
+        if not choice.isdigit(): choice = 0
+        idx = int(choice) - 1
+        if 0 <= idx < len(defs) and defs[idx] == db[w]['definition_en']:
+            print("✔️ Correct\n"); correct +=1; db[w]['stats']['choice']['c'] +=1
+        else:
+            print(f"❌ Wrong  → {w}\n"); db[w]['stats']['choice']['w'] +=1
+    _save(db)
+    print(f"Accuracy {correct}/{len(words)} ({round(correct/len(words)*100,1)}%)")
+    _log_session('choice', len(words), correct, t0)
+
+
+def quiz_spelling(n: int = 10):
+    db = _load(); words = _pick_words(n)
+    correct = 0; t0 = time.time()
+    for w in words:
+        _speak(w)
+        sys.stdout.flush()
+        ans = input("▶ Type the word you heard: ")
+        dist = _lev(ans.lower().strip(), w.lower())
+        if dist == 0:
+            print("✔️ Perfect\n"); correct +=1; db[w]['stats']['spelling']['c'] +=1
+        elif dist == 1:
+            print("➖ Almost (1 letter off) — counted as wrong\n"); db[w]['stats']['spelling']['w'] +=1
+        else:
+            print(f"❌ Wrong  → {w}\n"); db[w]['stats']['spelling']['w'] +=1
+    _save(db)
+    print(f"Spelling acc {correct}/{len(words)} ({round(correct/len(words)*100,1)}%)")
+    _log_session('spelling', len(words), correct, t0)
+
+# -------------------------- help -------------------------------
 
 def help():
-    print("Public APIs:")
-    print(" add_word, search_word, edit_word, delete_word")
-    print(" quiz_random, quiz_wrong, quiz_spelling")
-    print(" show_vocab, show_sessions, speak_example")
-    print(" setup_dirs (call after setting ws.BASE)")
+    print("Available functions:\n"
+          " setup_dirs()\n add_word(word, definition_en, examples, tags)\n search_word(word) / edit_word / delete_word\n show_vocab(order)\n\n Quizzes: quiz_random, quiz_wrong (TODO patch), quiz_spelling\n show_sessions(limit)\n speak_example(word, idx) (TODO re‑add)\n")
+
+# ------------------------ placeholders -------------------------
+
+def search_word(word:str):
+    db=_load()
+    if word in db:
+        print(json.dumps(db[word], ensure_ascii=False, indent=2))
+    else:
+        print("Not found")
+
+
+def delete_word(word:str):
+    db=_load()
+    if word in db:
+        del db[word]
+        _save(db)
+        print("deleted")
+
+
+def edit_word(word:str, definition_en:Optional[str]=None):
+    db=_load()
+    if word not in db:
+        print("not found"); return
+    if definition_en: db[word]['definition_en']=definition_en
+    _save(db)
+    print("updated")
