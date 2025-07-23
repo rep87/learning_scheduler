@@ -77,7 +77,7 @@ def quiz_random(n: int = 10) -> None:
 
         print("\nChoose the correct definition:")
         for i, d in enumerate(choices, 1):
-            print(f" {i} {d[:80]}")
+            print(f" {i} {d[:120]}")
         sys.stdout.flush()
 
         sel = input("Your choice: ")
@@ -98,6 +98,56 @@ def quiz_random(n: int = 10) -> None:
     print(f"Accuracy {correct_cnt}/{len(words)} "
           f"({round(correct_cnt/len(words)*100,1)}%)")
     _log_session("choice", len(words), correct_cnt, t0)
+
+def quiz_wrong(n: int = 10) -> None:
+    """
+    '틀린 횟수 - 맞힌 횟수 >= 0' 인 단어만 출제.
+    해당 단어가 리스트에서 사라지려면
+    ① 맞힌 횟수(c) 가 틀린 횟수(w) 보다 **2 이상 많아져야** 합니다.
+       (조건: c >= w + 2)
+    """
+    db = core.load_db()
+
+    def is_still_wrong(rec):
+        st = rec.get("stats", {}).get("choice", {})
+        c, w = st.get("c", 0), st.get("w", 0)
+        return c < w + 2          # 아직 졸업 못함
+
+    pool = [w for w, rec in db.items() if is_still_wrong(rec)]
+    if not pool:
+        print("🎉 No wrong words left to review!")
+        return
+
+    words = random.sample(pool, k=min(n, len(pool)))
+    # 이하 로직은 quiz_random() 과 동일 --------------------------------
+    all_defs = [rec["definition_en"] for rec in db.values()]
+    correct_cnt, t0 = 0, time.time()
+
+    for w in words:
+        speak(w)
+        correct_def = db[w]["definition_en"]
+        others = [d for d in all_defs if d != correct_def]
+        choices = [correct_def] + random.sample(others, k=min(3, len(others)))
+        random.shuffle(choices)
+
+        print("\nChoose the correct definition:")
+        for i, d in enumerate(choices, 1):
+            print(f" {i} {d[:120]}")
+        sys.stdout.flush()
+
+        sel = input("Your choice: ")
+        idx = int(sel) - 1 if sel.isdigit() else -1
+        st = db[w].setdefault("stats", {}).setdefault("choice", {"c": 0, "w": 0})
+
+        if 0 <= idx < len(choices) and choices[idx] == correct_def:
+            print("✔️ Correct\n"); st["c"] += 1; correct_cnt += 1
+        else:
+            print(f"❌ Wrong  → {w}\n"); st["w"] += 1
+
+    core.save_db(db)
+    print(f"Accuracy {correct_cnt}/{len(words)} "
+          f"({round(correct_cnt/len(words)*100,1)}%)")
+    _log_session("wrong", len(words), correct_cnt, t0)
 
 
 def quiz_spelling(n: int = 10) -> None:
