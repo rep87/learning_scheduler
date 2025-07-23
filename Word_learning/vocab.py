@@ -23,6 +23,33 @@ def add_word(word: str, definition_en: str, examples: List[str], tags: List[str]
     save_db(db)
     speak(word)
 
+def speak_example(word: str, idx: int | None = None):
+    """
+    저장된 예문을 보여주고 TTS로 읽어 줍니다.
+    • idx 가 None → 예문 목록만 표시
+    • idx 지정 → 해당 예문 출력 + 음성 재생
+    """
+    db = load_db()
+    rec = db.get(word)
+    if not rec:
+        print("Not found"); return
+
+    examples = rec.get("examples", [])
+    if not examples:
+        print("No examples stored."); return
+
+    if idx is None:
+        for i, ex in enumerate(examples):
+            print(f"[{i}] {ex}")
+        return
+
+    if idx < 0 or idx >= len(examples):
+        print("Index out of range"); return
+
+    ex = examples[idx]
+    print(ex)
+    speak(ex)
+
 def show_vocab(order: str = 'alpha'):
     db = load_db()
     items = list(db.items())
