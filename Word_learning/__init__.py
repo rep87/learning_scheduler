@@ -16,7 +16,7 @@ from . import core as _core
 from .core import BASE, setup_dirs
 from .vocab import (
     add_word, show_vocab, search_word,
-    delete_word, edit_word
+    delete_word, edit_word, speak_example
 )
 from .quiz import (
     quiz_random, quiz_spelling,
@@ -28,13 +28,12 @@ __version__ = "0.5.1-alpha"
 
 # 사용자가 import * 할 때 노출되는 심볼
 __all__ = [
-    "__version__",
-    "setup_dirs", "set_base_path",
+    "__version__", "setup_dirs", "set_base_path",
     # vocab
     "add_word", "show_vocab", "search_word",
-    "delete_word", "edit_word",
+    "delete_word", "edit_word", "speak_example",
     # quiz
-    "quiz_random", "quiz_spelling", "show_sessions",
+    "quiz_random", "quiz_spelling", "quiz_wrong", "show_sessions",
     # misc
     "speak",
 ]
