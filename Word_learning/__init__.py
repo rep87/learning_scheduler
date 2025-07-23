@@ -20,7 +20,7 @@ from .vocab import (
 )
 from .quiz import (
     quiz_random, quiz_spelling,
-    show_sessions
+    show_sessions, quiz_wrong
 )
 from .utils import speak
 
