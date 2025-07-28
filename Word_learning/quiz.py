@@ -108,13 +108,15 @@ def quiz_random(n: int = 10) -> None:
         # 통계 --------------------------------------------------------
         st = db[w].setdefault("stats", {}).setdefault("choice", {"c": 0, "w": 0})
 
+        # 정답/오답 판정 직후 -----------------------
         if 0 <= idx < len(choices) and choices[idx] == correct_def:
-            print(f"✔️ Correct  → {w}\n")
-            st["c"] += 1; correct_cnt += 1
+            st["c"] += 1; correct_cnt += 1           # ← 먼저 누적
+            print(f"✔️ Correct  → {w}   [{_stats_str(db[w])}]\n")
         else:
-            print(f"❌ Wrong  → {w} #{correct_idx+1} “{correct_def}”\n")
-            speak(w)              # 정답 발음 재생
             st["w"] += 1
+            print(f"❌ Wrong  → {w} #{correct_idx+1} “{correct_def}”   "
+                  f"[{_stats_str(db[w])}]\n")
+            speak(w)
 
     core.save_db(db)
     print(f"Accuracy {correct_cnt}/{len(words)} "
@@ -163,12 +165,13 @@ def quiz_wrong(n: int = 10) -> None:
         st = db[w].setdefault("stats", {}).setdefault("choice", {"c": 0, "w": 0})
 
         if 0 <= idx < len(choices) and choices[idx] == correct_def:
-            print(f"✔️ Correct  → {w}\n")
-            st["c"] += 1; correct_cnt += 1
+            st["c"] += 1; correct_cnt += 1           # ← 먼저 누적
+            print(f"✔️ Correct  → {w}   [{_stats_str(db[w])}]\n")
         else:
-            print(f"❌ Wrong  → {w} #{correct_idx+1} “{correct_def}”\n")
-            speak(w)              # 정답 발음 재생
             st["w"] += 1
+            print(f"❌ Wrong  → {w} #{correct_idx+1} “{correct_def}”   "
+                  f"[{_stats_str(db[w])}]\n")
+            speak(w)
 
     core.save_db(db)
     print(f"Accuracy {correct_cnt}/{len(words)} "
@@ -197,8 +200,10 @@ def quiz_spelling(n: int = 10):
 
         if dist == 0:
             print("✔️ Perfect\n"); st["c"] += 1; correct_cnt += 1
+            print(f"{w}   [{_stats_str(db[w])}]\n")
         elif dist == 1:
             print(f"➖ Almost (1 letter off) → {w}\n"); st["w"] += 1
+            print(f"{w}   [{_stats_str(db[w])}]\n")
         else:
             print(f"❌ Wrong → {w}\n"); st["w"] += 1
 
@@ -206,3 +211,11 @@ def quiz_spelling(n: int = 10):
     print(f"Spelling acc {correct_cnt}/{len(words)} "
           f"({round(correct_cnt/len(words)*100,1)}%)")
     _log_session("spelling", len(words), correct_cnt, t0)
+
+# 정답률 출력을 위한 함수
+def _stats_str(rec) -> str:
+    """choice (c/w) 와 spelling (c/w) 를 'choice 3/1 | spell 2/0' 형태로 반환"""
+    ch = rec.get("stats", {}).get("choice", {})
+    sp = rec.get("stats", {}).get("spelling", {})
+    return (f"choice {ch.get('c',0)}/{ch.get('w',0)} | "
+            f"spell {sp.get('c',0)}/{sp.get('w',0)}")
