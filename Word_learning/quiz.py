@@ -30,12 +30,18 @@ def _pick_words(db: dict, n: int, mode: str = "choice") -> list[str]:
     items = list(db.keys())
     if mode == "wrong":
         # 틀린 횟수 많은 순
-        items.sort(key=lambda w: db[w]["stats"]["choice"]["wrong"], reverse=True)
+        items.sort(
+                    key=lambda w: db[w].get("stats", {}).get("choice", {}).get("w", 0),
+                    reverse=True,
+                    )
     else:
-        # 푼 횟수(정답+오답) 적은 순
-        items.sort(key=lambda w: (
-            db[w]["stats"]["choice"]["correct"] + db[w]["stats"]["choice"]["wrong"]
-        ))
+        # (맞힘+c + 틀림+w) 적은 순
+        items.sort(
+            key=lambda w: (
+                db[w].get("stats", {}).get("choice", {}).get("c", 0)
+                + db[w].get("stats", {}).get("choice", {}).get("w", 0)
+            )
+        )
     return items[: min(n, len(items))]
 
 
