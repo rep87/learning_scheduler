@@ -155,32 +155,32 @@ def quiz_wrong(n: int = 10) -> None:
     _log_session("wrong", len(words), correct_cnt, t0)
 
 
-def quiz_spelling(n: int = 10) -> None:
+def quiz_spelling(n: int = 10):
     db = core.load_db()
     words = _pick_words(db, n)
     if not words:
         print("No words to quiz!"); return
 
     correct_cnt, t0 = 0, time.time()
-
     for w in words:
-        speak(w)
-        sys.stdout.flush()
-        ans = input("▶ Type the word you heard: ").strip()
-        dist = levenshtein(ans.lower(), w.lower())
+        speak(w)                         # 오디오 위젯 출력
+        print("\n" * 2)                  # ➊ 입력창이 위젯 아래로 내려오도록 빈 줄 삽입
+        sys.stdout.flush()               # ➋ 버퍼 강제 플러시
 
-        st = db[w].setdefault("stats", {}).setdefault("spelling", {"c": 0, "w": 0})
+        ans = input("▶ Type the word you heard (hit Enter twice to replay): ").strip()
+        if ans == "":                    # ➌ 빈 입력이면 다시 재생해 준다
+            speak(w); print("\n" * 2); sys.stdout.flush()
+            ans = input("▶ Type again: ").strip()
+
+        dist = levenshtein(ans.lower(), w.lower())
+        st = db[w].setdefault("stats", {}).setdefault("spelling", {"c":0,"w":0})
 
         if dist == 0:
-            print("✔️ Perfect\n")
-            st["c"] += 1
-            correct_cnt += 1
+            print("✔️ Perfect\n"); st["c"] += 1; correct_cnt += 1
         elif dist == 1:
-            print(f"➖ Almost (1 letter off) → {w}\n")
-            st["w"] += 1
+            print(f"➖ Almost (1 letter off) → {w}\n"); st["w"] += 1
         else:
-            print(f"❌ Wrong → {w}\n")
-            st["w"] += 1
+            print(f"❌ Wrong → {w}\n"); st["w"] += 1
 
     core.save_db(db)
     print(f"Spelling acc {correct_cnt}/{len(words)} "
