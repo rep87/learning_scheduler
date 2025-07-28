@@ -88,7 +88,7 @@ def quiz_random(n: int = 10) -> None:
         st = db[w].setdefault("stats", {}).setdefault("choice", {"c": 0, "w": 0})
 
         if 0 <= idx < len(choices) and choices[idx] == correct_def:
-            print("✔️ Correct\n")
+            print("✔️ Correct {w}\n")
             st["c"] += 1; correct_cnt += 1
         else:
             print(f"❌ Wrong  → {w} #{correct_idx+1} “{correct_def}”\n")
@@ -142,7 +142,7 @@ def quiz_wrong(n: int = 10) -> None:
         st = db[w].setdefault("stats", {}).setdefault("choice", {"c": 0, "w": 0})
 
         if 0 <= idx < len(choices) and choices[idx] == correct_def:
-            print("✔️ Correct\n")
+            print("✔️ Correct {w}\n")
             st["c"] += 1; correct_cnt += 1
         else:
             print(f"❌ Wrong  → {w} #{correct_idx+1} “{correct_def}”\n")
