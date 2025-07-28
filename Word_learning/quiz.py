@@ -74,6 +74,7 @@ def quiz_random(n: int = 10) -> None:
         others = [d for d in all_defs if d != correct_def]
         choices = [correct_def] + random.sample(others, k=min(3, len(others)))
         random.shuffle(choices)
+        correct_idx = choices.index(correct_def)
 
         print("\nChoose the correct definition:")
         for i, d in enumerate(choices, 1):
@@ -88,10 +89,10 @@ def quiz_random(n: int = 10) -> None:
 
         if 0 <= idx < len(choices) and choices[idx] == correct_def:
             print("✔️ Correct\n")
-            st["c"] += 1
-            correct_cnt += 1
+            st["c"] += 1; correct_cnt += 1
         else:
-            print(f"❌ Wrong  → {w}\n")
+            print(f"❌ Wrong  → #{correct_idx+1} “{correct_def}”\n")
+            speak(w)              # 정답 발음 재생
             st["w"] += 1
 
     core.save_db(db)
@@ -129,6 +130,7 @@ def quiz_wrong(n: int = 10) -> None:
         others = [d for d in all_defs if d != correct_def]
         choices = [correct_def] + random.sample(others, k=min(3, len(others)))
         random.shuffle(choices)
+        correct_idx = choices.index(correct_def)
 
         print("\nChoose the correct definition:")
         for i, d in enumerate(choices, 1):
@@ -140,9 +142,12 @@ def quiz_wrong(n: int = 10) -> None:
         st = db[w].setdefault("stats", {}).setdefault("choice", {"c": 0, "w": 0})
 
         if 0 <= idx < len(choices) and choices[idx] == correct_def:
-            print("✔️ Correct\n"); st["c"] += 1; correct_cnt += 1
+            print("✔️ Correct\n")
+            st["c"] += 1; correct_cnt += 1
         else:
-            print(f"❌ Wrong  → {w}\n"); st["w"] += 1
+            print(f"❌ Wrong  → #{correct_idx+1} “{correct_def}”\n")
+            speak(w)              # 정답 발음 재생
+            st["w"] += 1
 
     core.save_db(db)
     print(f"Accuracy {correct_cnt}/{len(words)} "
