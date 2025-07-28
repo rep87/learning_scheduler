@@ -215,12 +215,15 @@ def quiz_spelling(n: int = 10):
 
         if dist == 0:
             print("✔️ Perfect\n"); st["c"] += 1; correct_cnt += 1
+            print(f"Definition: {db[w]['definition_en']}\n")
             print(f"{w}   [{_stats_str(db[w])}]\n")
         elif dist == 1:
             print(f"➖ Almost (1 letter off) → {w}\n"); st["w"] += 1
+            print(f"Definition: {db[w]['definition_en']}\n")
             print(f"{w}   [{_stats_str(db[w])}]\n")
         else:
             print(f"❌ Wrong → {w}\n"); st["w"] += 1
+            print(f"Definition: {db[w]['definition_en']}\n")
 
             # 예문 출력
         examples = db[w].get("examples", [])
