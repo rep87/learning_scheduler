@@ -91,7 +91,7 @@ def quiz_random(n: int = 10) -> None:
             print("✔️ Correct\n")
             st["c"] += 1; correct_cnt += 1
         else:
-            print(f"❌ Wrong  → #{correct_idx+1} “{correct_def}”\n")
+            print(f"❌ Wrong  → {w} #{correct_idx+1} “{correct_def}”\n")
             speak(w)              # 정답 발음 재생
             st["w"] += 1
 
@@ -145,7 +145,7 @@ def quiz_wrong(n: int = 10) -> None:
             print("✔️ Correct\n")
             st["c"] += 1; correct_cnt += 1
         else:
-            print(f"❌ Wrong  → #{correct_idx+1} “{correct_def}”\n")
+            print(f"❌ Wrong  → {w} #{correct_idx+1} “{correct_def}”\n")
             speak(w)              # 정답 발음 재생
             st["w"] += 1
 
