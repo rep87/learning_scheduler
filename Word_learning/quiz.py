@@ -124,6 +124,8 @@ def quiz_random(n: int = 10) -> None:
             for ex in examples:
                 print(f"  • {ex}")
             print()  # 한 줄 띄우기
+            
+        print("*" * 30)
 
     core.save_db(db)
     print(f"Accuracy {correct_cnt}/{len(words)} "
@@ -188,6 +190,8 @@ def quiz_wrong(n: int = 10) -> None:
                 print(f"  • {ex}")
             print()  # 한 줄 띄우기
 
+        print("*" * 30)
+
     core.save_db(db)
     print(f"Accuracy {correct_cnt}/{len(words)} "
           f"({round(correct_cnt/len(words)*100,1)}%)")
@@ -232,6 +236,8 @@ def quiz_spelling(n: int = 10):
             for ex in examples:
                 print(f"  • {ex}")
             print()  # 한 줄 띄우기
+
+        print("*" * 30)
 
     core.save_db(db)
     print(f"Spelling acc {correct_cnt}/{len(words)} "
