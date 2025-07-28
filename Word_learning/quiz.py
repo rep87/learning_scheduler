@@ -165,9 +165,8 @@ def quiz_spelling(n: int = 10):
     for w in words:
         speak(w)                         # 오디오 위젯 출력
         print("\n" * 2)                  # ➊ 입력창이 위젯 아래로 내려오도록 빈 줄 삽입
-        sys.stdout.flush()               # ➋ 버퍼 강제 플러시
-
-        ans = input("▶ Type the word you heard (hit Enter twice to replay): ").strip()
+        print("▶ Type the word you heard (hit Enter twice to replay):")
+        ans = input().strip()
         if ans == "":                    # ➌ 빈 입력이면 다시 재생해 준다
             speak(w); print("\n" * 2); sys.stdout.flush()
             ans = input("▶ Type again: ").strip()
