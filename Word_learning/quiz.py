@@ -117,6 +117,13 @@ def quiz_random(n: int = 10) -> None:
             print(f"❌ Wrong  → {w} #{correct_idx+1} “{correct_def}”   "
                   f"[{_stats_str(db[w])}]\n")
             speak(w)
+        # 예문 출력
+        examples = db[w].get("examples", [])
+        if examples:
+            print("Examples:")
+            for ex in examples:
+                print(f"  • {ex}")
+            print()  # 한 줄 띄우기
 
     core.save_db(db)
     print(f"Accuracy {correct_cnt}/{len(words)} "
@@ -173,6 +180,14 @@ def quiz_wrong(n: int = 10) -> None:
                   f"[{_stats_str(db[w])}]\n")
             speak(w)
 
+            # 예문 출력
+        examples = db[w].get("examples", [])
+        if examples:
+            print("Examples:")
+            for ex in examples:
+                print(f"  • {ex}")
+            print()  # 한 줄 띄우기
+
     core.save_db(db)
     print(f"Accuracy {correct_cnt}/{len(words)} "
           f"({round(correct_cnt/len(words)*100,1)}%)")
@@ -206,6 +221,14 @@ def quiz_spelling(n: int = 10):
             print(f"{w}   [{_stats_str(db[w])}]\n")
         else:
             print(f"❌ Wrong → {w}\n"); st["w"] += 1
+
+            # 예문 출력
+        examples = db[w].get("examples", [])
+        if examples:
+            print("Examples:")
+            for ex in examples:
+                print(f"  • {ex}")
+            print()  # 한 줄 띄우기
 
     core.save_db(db)
     print(f"Spelling acc {correct_cnt}/{len(words)} "
