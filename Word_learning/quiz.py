@@ -19,9 +19,24 @@ from .utils import speak, levenshtein
 # ------------------------------------------------------------------
 # 내부 헬퍼
 # ------------------------------------------------------------------
-def _pick_words(db: dict, n: int) -> List[str]:
-    words = list(db.keys())
-    return words if len(words) <= n else random.sample(words, n)
+def _pick_words(db: dict, n: int, mode: str = "choice") -> list[str]:
+    """
+    mode == "choice"  → 정의 퀴즈(quiz_random, quiz_spelling): 
+                         (correct+wrong) 횟수가 적은 단어 먼저
+    mode == "wrong"   → 오답 퀴즈(quiz_wrong):
+                         wrong 횟수가 많은 단어 먼저
+    """
+    # 모든 단어 키 리스트
+    items = list(db.keys())
+    if mode == "wrong":
+        # 틀린 횟수 많은 순
+        items.sort(key=lambda w: db[w]["stats"]["choice"]["wrong"], reverse=True)
+    else:
+        # 푼 횟수(정답+오답) 적은 순
+        items.sort(key=lambda w: (
+            db[w]["stats"]["choice"]["correct"] + db[w]["stats"]["choice"]["wrong"]
+        ))
+    return items[: min(n, len(items))]
 
 
 def _log_session(mode: str, total: int, correct: int, started: float) -> None:
@@ -59,7 +74,7 @@ def show_sessions(limit: int = 10) -> None:
 
 def quiz_random(n: int = 10) -> None:
     db = core.load_db()
-    words = _pick_words(db, n)
+    words = _pick_words(db, n, mode='choice')
     if not words:
         print("No words to quiz!"); return
 
@@ -119,7 +134,7 @@ def quiz_wrong(n: int = 10) -> None:
         print("🎉 No wrong words left to review!")
         return
 
-    words = random.sample(pool, k=min(n, len(pool)))
+    words = _pick_words({w: db[w] for w in pool}, n, mode="wrong")
     # 이하 로직은 quiz_random() 과 동일 --------------------------------
     all_defs = [rec["definition_en"] for rec in db.values()]
     correct_cnt, t0 = 0, time.time()
@@ -157,7 +172,7 @@ def quiz_wrong(n: int = 10) -> None:
 
 def quiz_spelling(n: int = 10):
     db = core.load_db()
-    words = _pick_words(db, n)
+    words = _pick_words(db, n, mode="choice")
     if not words:
         print("No words to quiz!"); return
 
