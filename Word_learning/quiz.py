@@ -232,7 +232,7 @@ def quiz_spelling(n: int = 10, strategy: str = "least") -> None:
             return (s["wrong"] / tot) if tot else 1.0   # 아직 안 풀었으면 100% 오류로 간주
         items.sort(
             key=lambda w: (
-                -db[w]["stats"]["spelling"]["wrong"],
+                -db[w]["stats"]["spelling"]["w"],
                 -err_rate(w)
             )
         )
@@ -261,7 +261,8 @@ def quiz_spelling(n: int = 10, strategy: str = "least") -> None:
         ans = input("▶ Type the word you heard (Enter = replay): ").strip()
         if ans == "":
             speak(w); print("\n" * 2); sys.stdout.flush()
-            ans = input("▶ Type again: ").strip()
+            print("▶ Type the word you heard (Enter = replay):")
+            ans = input("> ").strip() 
 
         dist = levenshtein(ans.lower(), w.lower())
         st = db[w].setdefault("stats", {}).setdefault("spelling", {"c": 0, "w": 0})
