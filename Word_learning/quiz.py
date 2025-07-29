@@ -200,7 +200,7 @@ def quiz_wrong(n: int = 10) -> None:
 
 def quiz_spelling(n: int = 10):
     db = core.load_db()
-    words = _pick_words(db, n, mode="choice")
+    words = _pick_words(db, n, mode="spelling")
     if not words:
         print("No words to quiz!"); return
 
