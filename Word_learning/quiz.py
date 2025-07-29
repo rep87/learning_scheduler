@@ -21,29 +21,41 @@ from .utils import speak, levenshtein
 # ------------------------------------------------------------------
 def _pick_words(db: dict, n: int, mode: str = "choice") -> list[str]:
     """
-    mode == "choice"  → 정의 퀴즈(quiz_random, quiz_spelling): 
-                         (correct+wrong) 횟수가 적은 단어 먼저
-    mode == "wrong"   → 오답 퀴즈(quiz_wrong):
-                         wrong 횟수가 많은 단어 먼저
+    mode == "choice"  → 정의 퀴즈 / 철자 퀴즈: 풀이 횟수(정답+오답) 적은 순
+    mode == "wrong"   → 오답 퀴즈: 틀린 횟수 많은 순
+    mode == "spelling"→ 철자 퀴즈: 스펠링 퀴즈 횟수(정+오답) 적은 순
     """
-    # 모든 단어 키 리스트
     items = list(db.keys())
     if mode == "wrong":
-        # 틀린 횟수 많은 순
         items.sort(
-                    key=lambda w: db[w].get("stats", {}).get("choice", {}).get("w", 0),
-                    reverse=True,
-                    )
-    else:
-        # (맞힘+c + 틀림+w) 적은 순
+            key=lambda w: db[w].get("stats", {})
+                             .get("choice", {})
+                             .get("wrong", 0),
+            reverse=True,
+        )
+    elif mode == "spelling":
         items.sort(
             key=lambda w: (
-                db[w].get("stats", {}).get("choice", {}).get("c", 0)
-                + db[w].get("stats", {}).get("choice", {}).get("w", 0)
+                db[w].get("stats", {})
+                     .get("spelling", {})
+                     .get("correct", 0)
+                + db[w].get("stats", {})
+                     .get("spelling", {})
+                     .get("wrong", 0)
+            )
+        )
+    else:
+        items.sort(
+            key=lambda w: (
+                db[w].get("stats", {})
+                     .get("choice", {})
+                     .get("correct", 0)
+                + db[w].get("stats", {})
+                     .get("choice", {})
+                     .get("wrong", 0)
             )
         )
     return items[: min(n, len(items))]
-
 
 def _log_session(mode: str, total: int, correct: int, started: float) -> None:
     log = {
