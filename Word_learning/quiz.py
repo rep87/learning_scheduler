@@ -228,7 +228,7 @@ def quiz_spelling(n: int = 10, strategy: str = "least") -> None:
         # 틀린 횟수 & 오류율 높은 순
         def err_rate(w):
             s = db[w]["stats"]["spelling"]
-            tot = s["correct"] + s["wrong"]
+            tot = s["c"] + s["w"]
             return (s["wrong"] / tot) if tot else 1.0   # 아직 안 풀었으면 100% 오류로 간주
         items.sort(
             key=lambda w: (
@@ -240,8 +240,8 @@ def quiz_spelling(n: int = 10, strategy: str = "least") -> None:
         # 풀이 횟수 적은 순, 동률이면 틀린 횟수 많은 순
         items.sort(
             key=lambda w: (
-                db[w]["stats"]["spelling"]["correct"] + db[w]["stats"]["spelling"]["wrong"],
-                -db[w]["stats"]["spelling"]["wrong"]
+                db[w]["stats"]["spelling"]["c"] + db[w]["stats"]["spelling"]["w"],
+                -db[w]["stats"]["spelling"]["w"]
             )
         )
 
