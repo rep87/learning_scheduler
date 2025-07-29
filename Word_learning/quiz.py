@@ -209,51 +209,77 @@ def quiz_wrong(n: int = 10) -> None:
           f"({round(correct_cnt/len(words)*100,1)}%)")
     _log_session("wrong", len(words), correct_cnt, t0)
 
+def quiz_spelling(n: int = 10, strategy: str = "least") -> None:
+    """
+    Spelling recall quiz.
 
-def quiz_spelling(n: int = 10):
+    strategy:
+      • "least" : (correct+wrong) 풀이 횟수가 적은 단어부터,
+                   동률이면 wrong 많은 순
+      • "hard"  : wrong 횟수가 많은 단어부터,
+                   동률이면 error-rate(wrong/total) 높은 순
+    """
     db = core.load_db()
-    words = _pick_words(db, n, mode="spelling")
-    if not words:
-        print("No words to quiz!"); return
 
+    # ── 1. 출제 단어 선택 ─────────────────────────────
+    items = list(db.keys())
+
+    if strategy == "hard":
+        # 틀린 횟수 & 오류율 높은 순
+        def err_rate(w):
+            s = db[w]["stats"]["spelling"]
+            tot = s["correct"] + s["wrong"]
+            return (s["wrong"] / tot) if tot else 1.0   # 아직 안 풀었으면 100% 오류로 간주
+        items.sort(
+            key=lambda w: (
+                -db[w]["stats"]["spelling"]["wrong"],
+                -err_rate(w)
+            )
+        )
+    else:  # "least"
+        # 풀이 횟수 적은 순, 동률이면 틀린 횟수 많은 순
+        items.sort(
+            key=lambda w: (
+                db[w]["stats"]["spelling"]["correct"] + db[w]["stats"]["spelling"]["wrong"],
+                -db[w]["stats"]["spelling"]["wrong"]
+            )
+        )
+
+    words = items[: min(n, len(items))]
+    if not words:
+        print("No words to quiz!")
+        return
+
+    # ── 2. 퀴즈 진행 ─────────────────────────────────
     correct_cnt, t0 = 0, time.time()
+
     for w in words:
-        speak(w)                         # 오디오 위젯 출력
-        print("\n" * 2)                  # ➊ 입력창이 위젯 아래로 내려오도록 빈 줄 삽입
-        print("▶ Type the word you heard (hit Enter twice to replay):")
-        ans = input().strip()
-        if ans == "":                    # ➌ 빈 입력이면 다시 재생해 준다
+        speak(w)
+        print("\n" * 2)
+        sys.stdout.flush()
+
+        ans = input("▶ Type the word you heard (Enter = replay): ").strip()
+        if ans == "":
             speak(w); print("\n" * 2); sys.stdout.flush()
             ans = input("▶ Type again: ").strip()
 
         dist = levenshtein(ans.lower(), w.lower())
-        st = db[w].setdefault("stats", {}).setdefault("spelling", {"c":0,"w":0})
+        st = db[w].setdefault("stats", {}).setdefault("spelling", {"c": 0, "w": 0})
 
         if dist == 0:
             print("✔️ Perfect\n"); st["c"] += 1; correct_cnt += 1
-            print(f"Definition: {db[w]['definition_en']}\n")
-            print(f"{w}   [{_stats_str(db[w])}]\n")
         elif dist == 1:
-            print(f"➖ Almost (1 letter off) → {w}\n"); st["w"] += 1
-            print(f"Definition: {db[w]['definition_en']}\n")
-            print(f"{w}   [{_stats_str(db[w])}]\n")
+            print("➖ Almost (1 letter off) — counted as wrong\n"); st["w"] += 1
         else:
-            print(f"❌ Wrong → {w}\n"); st["w"] += 1
-            print(f"Definition: {db[w]['definition_en']}\n")
+            print(f"❌ Wrong  → {w}\n"); st["w"] += 1
 
-            # 예문 출력
-        examples = db[w].get("examples", [])
-        if examples:
-            print("Examples:")
-            for ex in examples:
-                print(f"  • {ex}")
-            print()  # 한 줄 띄우기
+        # 뜻 출력
+        print(f"Definition: {db[w]['definition_en']}\n")
 
-        print("*" * 30)
-
+    # ── 3. 저장 & 세션 로그 ──────────────────────────
     core.save_db(db)
-    print(f"Spelling acc {correct_cnt}/{len(words)} "
-          f"({round(correct_cnt/len(words)*100,1)}%)")
+    acc = round(correct_cnt / len(words) * 100, 1)
+    print(f"Spelling acc {correct_cnt}/{len(words)} ({acc}%)")
     _log_session("spelling", len(words), correct_cnt, t0)
 
 # 정답률 출력을 위한 함수
