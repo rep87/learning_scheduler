@@ -15,7 +15,7 @@ from typing import Dict, Any
 # ------------------------------------------------------------------
 # 전역 경로
 # ------------------------------------------------------------------
-BASE: Path = Path(".")              # Colab 등에서 set_base_path()로 덮어쓰게 됨.
+BASE: Path = Path(".")              # Colab 등에서 set_base_path()로 덮어씀
 DATA_DIR: Path | None = None
 WORDS_FILE: Path | None = None
 
@@ -23,11 +23,24 @@ WORDS_FILE: Path | None = None
 AUDIO_WORD_DIR: Path | None = None   # data/audio_cache/words_audio
 AUDIO_SENT_DIR: Path | None = None   # data/audio_cache/sentences_audio
 
-# 과거 코드 호환: 예전에는 AUDIO_DIR만 썼으므로 단어 경로로 별칭 유지
+# 과거 코드 호환: 예전에는 AUDIO_DIR만 사용 → 단어 경로로 별칭 유지
 AUDIO_DIR: Path | None = None
 
-# (선택) 퀴즈 세션 로그 파일 경로
+# 퀴즈 세션 로그 파일 경로
 QUIZZES_FILE: Path | None = None     # data/quizzes.jsonl
+
+
+# ------------------------------------------------------------------
+# BASE 설정
+# ------------------------------------------------------------------
+def set_base_path(base: str | Path) -> None:
+    """
+    BASE 경로를 지정하고 폴더/파일을 초기화합니다.
+    예: set_base_path('/content/drive/MyDrive/Projects/learning_scheduler')
+    """
+    global BASE
+    BASE = Path(base)
+    setup_dirs()
 
 
 # ------------------------------------------------------------------
@@ -52,15 +65,14 @@ def setup_dirs() -> None:
     # 레거시 호환: AUDIO_DIR 는 단어 오디오 경로로 유지
     AUDIO_DIR = AUDIO_WORD_DIR
 
-    # 디렉토리 생성
+    # 필수 디렉토리 생성
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     AUDIO_WORD_DIR.mkdir(parents=True, exist_ok=True)
     AUDIO_SENT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 빈 DB 파일 생성
+    # 빈 DB 파일/세션 로그 생성
     if not WORDS_FILE.exists():
         WORDS_FILE.write_text("{}", encoding="utf-8")
-
-    # 세션 로그 파일(존재하지 않으면 빈 파일 생성)
     if not QUIZZES_FILE.exists():
         QUIZZES_FILE.touch()
 
@@ -158,4 +170,3 @@ def save_db(db: Dict[str, Any]) -> None:
         json.dumps(db, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
-
