@@ -2,7 +2,7 @@
 """
 utils.py
 ~~~~~~~~
-• TTS 재생(speak): 단어/문장 캐시 분리 저장
+• TTS 재생(speak): 단어/문장 캐시 분리 + JS 재생 기본(위젯 생성 안 함)
 • 문자열 거리(levenshtein)
 """
 
@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Optional
 import hashlib
 import re
-import HTML
 import base64
 
 from . import core
@@ -22,8 +21,13 @@ from . import core
 try:
     from gtts import gTTS
     from IPython.display import Audio, display, HTML, Javascript
-except ImportError:
-    gTTS = Audio = display = HTML = Javascript = None
+except Exception:
+    gTTS = None
+    Audio = None
+    display = None
+    HTML = None
+    Javascript = None
+
 
 def _require_dirs() -> None:
     """core.setup_dirs() 가 안 돌았으면 자동 호출."""
@@ -32,7 +36,7 @@ def _require_dirs() -> None:
 
 
 def _is_sentence_text(text: str) -> bool:
-    """공백이 있거나(단어 2개 이상) 문장부호가 포함되면 문장으로 간주."""
+    """공백(단어 2개 이상) 또는 문장부호가 있으면 문장으로 간주."""
     if len(text.split()) > 1:
         return True
     return bool(re.search(r"[.,;:!?]", text))
@@ -59,18 +63,27 @@ def _tts_cache_path(text: str, is_sentence: bool) -> Path:
     else:
         return core.AUDIO_WORD_DIR / f"{_slug_word(text)}.mp3"  # type: ignore[arg-type]
 
-def speak(text: str,
-          *,
-          lang: str = "en",
-          autoplay: bool = True,
-          slow: bool = False,
-          force_sentence: Optional[bool] = None,
-          ui: str = "js") -> None:
+
+def speak(
+    text: str,
+    *,
+    lang: str = "en",
+    autoplay: bool = True,
+    slow: bool = False,
+    force_sentence: Optional[bool] = None,
+    ui: str = "js",
+) -> None:
     """
+    텍스트를 음성으로 재생(캐시 사용).
+    - 문장: data/audio_cache/sentences_audio/sent_<sha1>.mp3
+    - 단어: data/audio_cache/words_audio/<slug>.mp3
+
     ui:
-      - "js": DOM 위젯 없이 JS로 재생(권장, input() 덮힘 방지)
-      - "hidden": <audio>를 0px로 숨겨 임베드(대안)
-      - "player": 플레이어 노출(디버그용)
+      - "js"     : DOM 위젯 없이 JS로 재생(권장, input() 겹침 방지)
+      - "hidden" : <audio>를 0px로 숨겨 임베드
+      - "player" : 플레이어 노출(디버그용)
+
+    gTTS/Audio 미설치·오프라인이면 텍스트 안내만 출력.
     """
     _require_dirs()
 
@@ -78,13 +91,16 @@ def speak(text: str,
     mp3: Path = _tts_cache_path(text, is_sentence)
 
     if gTTS is None:
-        print(f"[TTS unavailable] → {text}\n(cache: {mp3})"); return
+        print(f"[TTS unavailable] → {text}\n(cache: {mp3})")
+        return
 
     if not mp3.exists():
         try:
-            gTTS(_norm_sentence(text) if is_sentence else text, lang=lang, slow=slow).save(str(mp3))
+            payload = _norm_sentence(text) if is_sentence else text
+            gTTS(payload, lang=lang, slow=slow).save(str(mp3))
         except Exception as e:
-            print(f"[TTS failed] {e} → {text}"); return
+            print(f"[TTS failed] {e} → {text}")
+            return
 
     # ── 재생 ──────────────────────────────────────────────────
     try:
@@ -94,37 +110,38 @@ def speak(text: str,
 
         if ui == "hidden" and Audio is not None and display is not None and HTML is not None:
             ao = Audio(str(mp3), autoplay=autoplay)
-            display(HTML(f'<div style="height:0;overflow:hidden">{ao._repr_html_()}</div>'))
+            hidden = '<div style="height:0;overflow:hidden">' + ao._repr_html_() + "</div>"
+            display(HTML(hidden))
             return
 
         # ui == "js" (default): mp3 바이트를 data URI로 JS 재생 → 위젯 없음, 레이아웃 이동 없음
-       if Javascript is not None and display is not None:
-            import base64
+        if ui == "js" and Javascript is not None and display is not None:
             b64 = base64.b64encode(mp3.read_bytes()).decode("ascii")
-            data_uri = f"data:audio/mpeg;base64,{b64}"
+            data_uri = "data:audio/mpeg;base64," + b64
             autoplay_js = "true" if autoplay else "false"
-            
-            js = "\n".join([
+            js_lines = [
                 "(function(){",
                 "  try {",
                 f'    var a = new Audio("{data_uri}");',
                 f"    a.autoplay = {autoplay_js};",
-                "    a.play().catch(function(){});",  # 위젯 없이 재생; 레이아웃 변화 없음
+                "    a.play().catch(function(){});",
                 "  } catch(e) {}",
-                "})();"
-            ])
-            display(Javascript(js))
+                "})();",
+            ]
+            display(Javascript("\n".join(js_lines)))
             return
 
-        # JS 가용 불가한 경우: 최소한의 숨김 임베드로 fallback
+        # JS 미가용 시 최소한의 숨김 임베드
         if Audio is not None and display is not None and HTML is not None:
             ao = Audio(str(mp3), autoplay=autoplay)
-            display(HTML(f'<div style="height:0;overflow:hidden">{ao._repr_html_()}</div>'))
+            hidden = '<div style="height:0;overflow:hidden">' + ao._repr_html_() + "</div>"
+            display(HTML(hidden))
         else:
             print(f"[Audio playback not available] (cached at: {mp3})")
 
     except Exception as e:
         print(f"[Audio playback failed] {e} → {text} (cached at: {mp3})")
+
 
 # --------------------------------------------------------------
 # 2. Levenshtein
@@ -149,11 +166,9 @@ def levenshtein(a: str, b: str) -> int:
     for i, ca in enumerate(a, 1):
         curr = [i]
         for j, cb in enumerate(b, 1):
-            ins, dele, sub = (
-                prev[j] + 1,
-                curr[j - 1] + 1,
-                prev[j - 1] + (ca != cb),
-            )
+            ins = prev[j] + 1
+            dele = curr[j - 1] + 1
+            sub = prev[j - 1] + (ca != cb)
             curr.append(min(ins, dele, sub))
         prev = curr
     return prev[-1]
