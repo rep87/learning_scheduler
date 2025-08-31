@@ -27,12 +27,17 @@ def _is_sentence(rec: dict) -> bool:
     """tags에 'sentence'가 있으면 문장으로 간주"""
     return "sentence" in set(rec.get("tags", []))
 
-def _filter_by_tags(db: dict, tags: List[str] | None) -> list[str]:
-    """지정 태그가 하나라도 포함된 항목만 선택. tags=None이면 전체"""
-    if not tags:
-        return list(db.keys())
-    want = set(tags)
-    return [w for w, rec in db.items() if want & set(rec.get("tags", []))]
+def _filter_by_tags(db: dict,
+                    include: List[str] | None = None,
+                    exclude: List[str] | None = None) -> list[str]:
+    items = list(db.keys())
+    if include:
+        want = set(include)
+        items = [w for w in items if want & set(db[w].get("tags", []))]
+    if exclude:
+        ban = set(exclude)
+        items = [w for w in items if not (ban & set(db[w].get("tags", [])))]
+    return items
 
 def _first_letter_signature(text: str) -> str:
     """영숫자 단어들의 첫 글자를 이어붙인 서명"""
@@ -92,22 +97,29 @@ def _stats_str(rec) -> str:
 # 출제 대상 선정
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _pick_items_for_choice(db: dict, n: int) -> list[str]:
-    """객관식 기본: choice (c+w) 적은 순, 동률이면 w 많은 순"""
-    items = list(db.keys())
+def _pick_items_for_choice(db: dict, n: int,
+                           include_tags: List[str] | None = None,
+                           exclude_tags: List[str] | None = None,
+                           require_def: bool = True) -> list[str]:
+    items = _filter_by_tags(db, include=include_tags, exclude=exclude_tags)
+    if require_def:
+        items = [w for w in items if db[w].get("definition_en", "").strip()]
     items.sort(key=lambda w: (
-        _stats_tuple(db[w], "choice")[2],                 # tot asc
-        -_stats_tuple(db[w], "choice")[1],                # wrong desc
+        _stats_tuple(db[w], "choice")[2],     # tot asc
+        -_stats_tuple(db[w], "choice")[1],    # wrong desc
     ))
     return items[: min(n, len(items))]
 
-def _pick_items_for_wrong(db: dict, n: int) -> list[str]:
-    """
-    오답 우선: 아직 졸업 못한 단어(c < w + 2)만, wrong 많은 순
-    간단 규칙으로 유지
-    """
+def _pick_items_for_wrong(db: dict, n: int,
+                          include_tags: List[str] | None = None,
+                          exclude_tags: List[str] | None = None,
+                          require_def: bool = True) -> list[str]:
+    cand = _filter_by_tags(db, include=include_tags, exclude=exclude_tags)
     pool = []
-    for w, rec in db.items():
+    for w in cand:
+        rec = db[w]
+        if require_def and not rec.get("definition_en", "").strip():
+            continue
         c, wcnt, *_ = _stats_tuple(rec, "choice")
         if c < wcnt + 2:
             pool.append(w)
@@ -115,19 +127,16 @@ def _pick_items_for_wrong(db: dict, n: int) -> list[str]:
     return pool[: min(n, len(pool))]
 
 def _pick_items_for_spelling(db: dict, n: int, strategy: str, tags: List[str] | None) -> list[str]:
-    """스펠링 대상: 태그로 필터 후 전략에 맞춰 정렬"""
-    items = _filter_by_tags(db, tags)
+    items = _filter_by_tags(db, include=tags, exclude=None)
     if not items:
         return []
     if strategy == "hard":
-        # wrong desc, err_rate desc, tot desc
         items.sort(key=lambda w: (
             _stats_tuple(db[w], "spelling")[1],
             _stats_tuple(db[w], "spelling")[3],
             _stats_tuple(db[w], "spelling")[2],
         ), reverse=True)
-    else:  # "least"
-        # tot asc, wrong desc
+    else:
         items.sort(key=lambda w: (
             _stats_tuple(db[w], "spelling")[2],
             -_stats_tuple(db[w], "spelling")[1],
@@ -212,23 +221,26 @@ def show_sessions(limit: int = 10) -> None:
             f"| {j['duration']:4}s | {j['started_at'][:16]}"
         )
 
-def quiz_random(n: int = 10) -> None:
-    """정의 4지선다 (풀이 적은 순)"""
+def quiz_random(n: int = 10,
+                include_tags: List[str] | None = None,
+                exclude_tags: List[str] | None = ["sentence"]) -> None:
     db = core.load_db()
-    words = _pick_items_for_choice(db, n)
+    words = _pick_items_for_choice(db, n, include_tags, exclude_tags, require_def=True)
+    if not words:
+        print("No eligible words (maybe all lack definitions or excluded by tags)."); return
     t0 = time.time()
     correct_cnt = _multiple_choice_session(db, words)
     core.save_db(db)
     print(f"Accuracy {correct_cnt}/{len(words)} ({round(correct_cnt/len(words)*100,1)}%)")
     _log_session("choice", len(words), correct_cnt, t0)
 
-def quiz_wrong(n: int = 10) -> None:
-    """오답 우선 4지선다 (아직 졸업 못한 단어 위주)"""
+def quiz_wrong(n: int = 10,
+               include_tags: List[str] | None = None,
+               exclude_tags: List[str] | None = ["sentence"]) -> None:
     db = core.load_db()
-    words = _pick_items_for_wrong(db, n)
+    words = _pick_items_for_wrong(db, n, include_tags, exclude_tags, require_def=True)
     if not words:
-        print("🎉 No wrong words left to review!")
-        return
+        print("🎉 No wrong words left to review (or filtered out)."); return
     t0 = time.time()
     correct_cnt = _multiple_choice_session(db, words)
     core.save_db(db)
