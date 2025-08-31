@@ -2,62 +2,115 @@
 """
 utils.py
 ~~~~~~~~
-• TTS 재생(speak)
+• TTS 재생(speak): 단어/문장 캐시 분리 저장
 • 문자열 거리(levenshtein)
 """
 
 from __future__ import annotations
 from pathlib import Path
 from typing import Optional
+import hashlib
+import re
 
 from . import core
 
 # --------------------------------------------------------------
-# 1. TTS (gTTS → MP3)  ----------------------------------------
+# 1. TTS (gTTS → MP3)
 # --------------------------------------------------------------
-
 try:
     from gtts import gTTS
     from IPython.display import Audio, display
 except ImportError:               # 노트북 런타임에 패키지가 없을 때
-    gTTS = Audio = display = None
+    gTTS = None
+    Audio = None
+    display = None
 
 
 def _require_dirs() -> None:
     """core.setup_dirs() 가 안 돌았으면 자동 호출."""
-    if core.AUDIO_DIR is None:
+    if core.AUDIO_WORD_DIR is None or core.AUDIO_SENT_DIR is None:
         core.setup_dirs()
 
 
-def speak(word: str, *, lang: str = "en", autoplay: bool = True) -> None:
+def _is_sentence_text(text: str) -> bool:
+    """공백이 있거나(단어 2개 이상) 문장부호가 포함되면 문장으로 간주."""
+    if len(text.split()) > 1:
+        return True
+    return bool(re.search(r"[.,;:!?]", text))
+
+
+def _slug_word(text: str) -> str:
+    """단어 파일명 안전화 (소문자, 영숫자/하이픈/언더스코어만)."""
+    slug = re.sub(r"[^a-z0-9_-]+", "_", text.strip().lower())
+    return slug or "word"
+
+
+def _norm_sentence(text: str) -> str:
+    """문장 해시용 정규화: 공백 정리 + 트림."""
+    return re.sub(r"\s+", " ", text.strip())
+
+
+def _tts_cache_path(text: str, is_sentence: bool) -> Path:
+    """문장/단어에 맞는 캐시 경로 반환."""
+    _require_dirs()
+    if is_sentence:
+        norm = _norm_sentence(text)
+        h = hashlib.sha1(norm.encode("utf-8")).hexdigest()[:16]
+        return core.AUDIO_SENT_DIR / f"sent_{h}.mp3"  # type: ignore[arg-type]
+    else:
+        return core.AUDIO_WORD_DIR / f"{_slug_word(text)}.mp3"  # type: ignore[arg-type]
+
+
+def speak(text: str,
+          *,
+          lang: str = "en",
+          autoplay: bool = True,
+          slow: bool = False,
+          force_sentence: Optional[bool] = None) -> None:
     """
-    단어를 음성으로 읽어 줍니다.  
-    gTTS 미설치·오프라인 환경이면 텍스트 안내만 출력합니다.
+    텍스트를 음성으로 재생합니다(캐시 사용).
+    - 문장: data/audio_cache/sentences_audio/sent_<sha1>.mp3
+    - 단어: data/audio_cache/words_audio/<slug>.mp3
+
+    gTTS/Audio 미설치·오프라인이면 텍스트 안내만 출력합니다.
     """
     _require_dirs()
 
-    if gTTS is None:
-        print(f"[TTS unavailable] → {word}")
+    is_sentence = force_sentence if force_sentence is not None else _is_sentence_text(text)
+    mp3: Path = _tts_cache_path(text, is_sentence)
+
+    if gTTS is None or Audio is None or display is None:
+        print(f"[TTS unavailable] → {text}")
+        print(f"(cache path hint: {mp3})")
         return
 
-    mp3: Path = core.AUDIO_DIR / f"{word.lower()}.mp3"
     if not mp3.exists():
-        gTTS(word, lang=lang).save(str(mp3))
-    display(Audio(str(mp3), autoplay=autoplay))
+        try:
+            gTTS(_norm_sentence(text) if is_sentence else text, lang=lang, slow=slow).save(str(mp3))
+        except Exception as e:  # 네트워크/언어 코드 오류 등
+            print(f"[TTS failed] {e} → {text}")
+            return
+
+    # 캐시된 mp3 재생
+    try:
+        display(Audio(str(mp3), autoplay=autoplay))
+    except Exception as e:
+        print(f"[Audio playback failed] {e} → {text}")
+        print(f"(cached at: {mp3})")
 
 
 # --------------------------------------------------------------
-# 2. Levenshtein ---------------------------------------------
+# 2. Levenshtein
 # --------------------------------------------------------------
 def levenshtein(a: str, b: str) -> int:
     """
-    레벤슈타인 거리 O(len(a)·len(b))  
+    레벤슈타인 거리 O(len(a)·len(b))
     외부 C 확장(python-Levenshtein)이 설치돼 있으면 그쪽으로 위임.
     """
     try:
         import Levenshtein as _lev  # type: ignore
         return _lev.distance(a, b)
-    except ImportError:
+    except Exception:
         pass  # fallback to pure-python below
 
     if len(a) < len(b):
