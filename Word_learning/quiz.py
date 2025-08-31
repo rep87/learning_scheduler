@@ -159,7 +159,8 @@ def _multiple_choice_session(db: dict, words: list[str]) -> int:
 
     for w in words:
         rec = db[w]
-        speak(w)
+        speak(w, ui="hidden")
+        time.sleep(0.12)
 
         correct_def = rec.get("definition_en", "")
         others = [d for d in all_defs if d and d != correct_def]
@@ -187,7 +188,8 @@ def _multiple_choice_session(db: dict, words: list[str]) -> int:
             st["w"] += 1
             ans = f" #{correct_idx+1}" if correct_idx >= 0 else ""
             print(f"❌ Wrong  → {w}{ans} “{correct_def}”   [{_stats_str(rec)}]\n")
-            speak(w)
+            speak(w, ui="hidden")
+            time.sleep(0.12) 
 
         # 예문 출력
         examples = rec.get("examples", [])
@@ -275,12 +277,13 @@ def quiz_spelling(n: int = 10,
             print(f"Hint (first letters): {_mask_hint_first_letters(w)}")
 
         # 오디오 & 입력
-        speak(w); print(); sys.stdout.flush()
+        speak(w, ui="hidden"); print(); sys.stdout.flush()
+        time.sleep(0.12)
         prompt = "▶ Type what you heard (Enter = replay): " if is_sent \
                  else "▶ Type the word you heard (Enter = replay): "
         ans = input(prompt).strip()
         if ans == "":
-            speak(w); print(); sys.stdout.flush()
+            speak(w, ui="hidden"); print(); sys.stdout.flush()
             ans = input("> ").strip()
 
         st = _stats(rec, "spelling")
