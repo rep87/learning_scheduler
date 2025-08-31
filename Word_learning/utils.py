@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 import hashlib
 import re
+import HTML
 
 from . import core
 
@@ -19,12 +20,9 @@ from . import core
 # --------------------------------------------------------------
 try:
     from gtts import gTTS
-    from IPython.display import Audio, display
-except ImportError:               # 노트북 런타임에 패키지가 없을 때
-    gTTS = None
-    Audio = None
-    display = None
-
+    from IPython.display import Audio, display, HTML
+except ImportError:
+    gTTS = Audio = display = HTML = None
 
 def _require_dirs() -> None:
     """core.setup_dirs() 가 안 돌았으면 자동 호출."""
@@ -60,19 +58,17 @@ def _tts_cache_path(text: str, is_sentence: bool) -> Path:
     else:
         return core.AUDIO_WORD_DIR / f"{_slug_word(text)}.mp3"  # type: ignore[arg-type]
 
-
 def speak(text: str,
           *,
           lang: str = "en",
           autoplay: bool = True,
           slow: bool = False,
-          force_sentence: Optional[bool] = None) -> None:
+          force_sentence: Optional[bool] = None,
+          ui: str = "hidden") -> None:
     """
-    텍스트를 음성으로 재생합니다(캐시 사용).
-    - 문장: data/audio_cache/sentences_audio/sent_<sha1>.mp3
-    - 단어: data/audio_cache/words_audio/<slug>.mp3
-
-    gTTS/Audio 미설치·오프라인이면 텍스트 안내만 출력합니다.
+    ui:
+      - "hidden": 플레이어를 보이지 않게 임베드하고 자동 재생(권장)
+      - "player": 플레이어 노출
     """
     _require_dirs()
 
@@ -80,24 +76,26 @@ def speak(text: str,
     mp3: Path = _tts_cache_path(text, is_sentence)
 
     if gTTS is None or Audio is None or display is None:
-        print(f"[TTS unavailable] → {text}")
-        print(f"(cache path hint: {mp3})")
+        print(f"[TTS unavailable] → {text}\n(cache: {mp3})")
         return
 
     if not mp3.exists():
         try:
             gTTS(_norm_sentence(text) if is_sentence else text, lang=lang, slow=slow).save(str(mp3))
-        except Exception as e:  # 네트워크/언어 코드 오류 등
+        except Exception as e:
             print(f"[TTS failed] {e} → {text}")
             return
 
-    # 캐시된 mp3 재생
     try:
-        display(Audio(str(mp3), autoplay=autoplay))
+        ao = Audio(str(mp3), autoplay=autoplay)
+        if ui == "hidden" and HTML is not None:
+            # Audio의 HTML을 감싸서 보이지 않게 임베드(자동재생은 그대로)
+            hidden_html = f'<div style="height:0;overflow:hidden">{ao._repr_html_()}</div>'
+            display(HTML(hidden_html))
+        else:
+            display(ao)
     except Exception as e:
-        print(f"[Audio playback failed] {e} → {text}")
-        print(f"(cached at: {mp3})")
-
+        print(f"[Audio playback failed] {e} → {text} (cached at: {mp3})")
 
 # --------------------------------------------------------------
 # 2. Levenshtein
