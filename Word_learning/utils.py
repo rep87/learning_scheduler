@@ -12,6 +12,7 @@ from typing import Optional
 import hashlib
 import re
 import HTML
+import base64
 
 from . import core
 
@@ -20,9 +21,9 @@ from . import core
 # --------------------------------------------------------------
 try:
     from gtts import gTTS
-    from IPython.display import Audio, display, HTML
+    from IPython.display import Audio, display, HTML, Javascript
 except ImportError:
-    gTTS = Audio = display = HTML = None
+    gTTS = Audio = display = HTML = Javascript = None
 
 def _require_dirs() -> None:
     """core.setup_dirs() 가 안 돌았으면 자동 호출."""
@@ -64,36 +65,64 @@ def speak(text: str,
           autoplay: bool = True,
           slow: bool = False,
           force_sentence: Optional[bool] = None,
-          ui: str = "hidden") -> None:
+          ui: str = "js") -> None:
     """
     ui:
-      - "hidden": 플레이어를 보이지 않게 임베드하고 자동 재생(권장)
-      - "player": 플레이어 노출
+      - "js": DOM 위젯 없이 JS로 재생(권장, input() 덮힘 방지)
+      - "hidden": <audio>를 0px로 숨겨 임베드(대안)
+      - "player": 플레이어 노출(디버그용)
     """
     _require_dirs()
 
     is_sentence = force_sentence if force_sentence is not None else _is_sentence_text(text)
     mp3: Path = _tts_cache_path(text, is_sentence)
 
-    if gTTS is None or Audio is None or display is None:
-        print(f"[TTS unavailable] → {text}\n(cache: {mp3})")
-        return
+    if gTTS is None:
+        print(f"[TTS unavailable] → {text}\n(cache: {mp3})"); return
 
     if not mp3.exists():
         try:
             gTTS(_norm_sentence(text) if is_sentence else text, lang=lang, slow=slow).save(str(mp3))
         except Exception as e:
-            print(f"[TTS failed] {e} → {text}")
+            print(f"[TTS failed] {e} → {text}"); return
+
+    # ── 재생 ──────────────────────────────────────────────────
+    try:
+        if ui == "player" and Audio is not None and display is not None:
+            display(Audio(str(mp3), autoplay=autoplay))
             return
 
-    try:
-        ao = Audio(str(mp3), autoplay=autoplay)
-        if ui == "hidden" and HTML is not None:
-            # Audio의 HTML을 감싸서 보이지 않게 임베드(자동재생은 그대로)
-            hidden_html = f'<div style="height:0;overflow:hidden">{ao._repr_html_()}</div>'
-            display(HTML(hidden_html))
+        if ui == "hidden" and Audio is not None and display is not None and HTML is not None:
+            ao = Audio(str(mp3), autoplay=autoplay)
+            display(HTML(f'<div style="height:0;overflow:hidden">{ao._repr_html_()}</div>'))
+            return
+
+        # ui == "js" (default): mp3 바이트를 data URI로 JS 재생 → 위젯 없음, 레이아웃 이동 없음
+       if Javascript is not None and display is not None:
+            import base64
+            b64 = base64.b64encode(mp3.read_bytes()).decode("ascii")
+            data_uri = f"data:audio/mpeg;base64,{b64}"
+            autoplay_js = "true" if autoplay else "false"
+            
+            js = "\n".join([
+                "(function(){",
+                "  try {",
+                f'    var a = new Audio("{data_uri}");',
+                f"    a.autoplay = {autoplay_js};",
+                "    a.play().catch(function(){});",  # 위젯 없이 재생; 레이아웃 변화 없음
+                "  } catch(e) {}",
+                "})();"
+            ])
+            display(Javascript(js))
+            return
+
+        # JS 가용 불가한 경우: 최소한의 숨김 임베드로 fallback
+        if Audio is not None and display is not None and HTML is not None:
+            ao = Audio(str(mp3), autoplay=autoplay)
+            display(HTML(f'<div style="height:0;overflow:hidden">{ao._repr_html_()}</div>'))
         else:
-            display(ao)
+            print(f"[Audio playback not available] (cached at: {mp3})")
+
     except Exception as e:
         print(f"[Audio playback failed] {e} → {text} (cached at: {mp3})")
 
